@@ -4,7 +4,8 @@ env/
 .env/
 
 # ── Konfigurasi Sensitif (berisi password) ───────────────────
-config.py
+# config.py sudah diubah menggunakan environment variables, jadi aman di-push
+# config.py
 
 # ── Data Wajah (privasi) — folder tetap ada, isi diabaikan ──
 dataset/*
