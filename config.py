@@ -9,8 +9,7 @@ DB_CONFIG = {
     'port': int(os.environ.get('MYSQLPORT', os.environ.get('DB_PORT', 3306))),
     'user': os.environ.get('MYSQLUSER', os.environ.get('DB_USER', 'root')),
     'password': os.environ.get('MYSQLPASSWORD', os.environ.get('DB_PASSWORD', '')),
-    'database': os.environ.get('MYSQLDATABASE', os.environ.get('DB_NAME', 'railway')),
-    'ssl_disabled': True
+    'database': os.environ.get('MYSQLDATABASE', os.environ.get('DB_NAME', 'railway'))
 }
 
 # === KONFIGURASI SISTEM ===
