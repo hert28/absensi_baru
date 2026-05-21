@@ -5,11 +5,12 @@ import os
 
 # === KONFIGURASI DATABASE ===
 DB_CONFIG = {
-    'host': os.environ.get('DB_HOST', 'localhost'),
-    'port': int(os.environ.get('DB_PORT', 3306)),
-    'user': os.environ.get('DB_USER', 'root'),
-    'password': os.environ.get('DB_PASSWORD', ''),
-    'database': os.environ.get('DB_NAME', 'absensi_db')
+    'host': os.environ.get('MYSQLHOST', os.environ.get('DB_HOST', 'localhost')),
+    'port': int(os.environ.get('MYSQLPORT', os.environ.get('DB_PORT', 3306))),
+    'user': os.environ.get('MYSQLUSER', os.environ.get('DB_USER', 'root')),
+    'password': os.environ.get('MYSQLPASSWORD', os.environ.get('DB_PASSWORD', '')),
+    'database': os.environ.get('MYSQLDATABASE', os.environ.get('DB_NAME', 'railway')),
+    'ssl_disabled': True
 }
 
 # === KONFIGURASI SISTEM ===

@@ -5,9 +5,8 @@ import mysql.connector
 from config import DB_CONFIG
 
 def run():
-    # Koneksi tanpa database dulu (untuk CREATE DATABASE)
-    cfg = {k: v for k, v in DB_CONFIG.items() if k != 'database'}
-    conn = mysql.connector.connect(**cfg)
+    # Koneksi langsung ke database dari config (otomatis pakai database Railway)
+    conn = mysql.connector.connect(**DB_CONFIG)
     cursor = conn.cursor()
 
     with open('migration.sql', 'r', encoding='utf-8') as f:
