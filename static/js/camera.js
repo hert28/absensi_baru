@@ -254,10 +254,10 @@ const CameraManager = {
                 this._throttledToast('info', 'Sudah Absen', data.pesan || 'Mahasiswa sudah absen hari ini.');
             } else if (data.tipe === 'unknown') {
                 if (indicatorSpan) indicatorSpan.textContent = '? Wajah tidak dikenali';
-                this._throttledToast('warning', 'Tidak Dikenali', data.pesan || 'Wajah tidak cocok dengan database.');
+                // this._throttledToast('warning', 'Tidak Dikenali', data.pesan || 'Wajah tidak cocok dengan database.');
             } else if (data.tipe === 'no_jadwal') {
                 if (indicatorSpan) indicatorSpan.textContent = '⏰ Tidak ada jadwal';
-                this._throttledToast('warning', 'Tidak Ada Jadwal', data.pesan || 'Tidak ada jadwal aktif saat ini.');
+                // this._throttledToast('warning', 'Tidak Ada Jadwal', data.pesan || 'Tidak ada jadwal aktif saat ini.');
             } else {
                 if (indicatorSpan) indicatorSpan.textContent = 'Memproses...';
                 console.warn('[CAMERA] Recognition error:', data.pesan);
