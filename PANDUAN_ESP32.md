@@ -1,87 +1,67 @@
-# PANDUAN INTEGRASI ESP32 — Sistem Absensi Face Recognition (OLED SSD1306)
-> Baca panduan ini saat hardware ESP32, layar OLED SSD1306 I2C, dan LED sudah siap dirangkai.
+# PANDUAN INTEGRASI ESP32 — Sistem Absensi Face Recognition (LCD 16×2 I2C)
+> Panduan ini menjelaskan cara menghubungkan ESP32 + LCD 16×2 I2C ke sistem absensi yang sudah live di Railway (HTTPS).
 
 ---
 
 ## DAFTAR KOMPONEN YANG DIBUTUHKAN
 
-| Komponen              | Jumlah | Keterangan                              |
-|-----------------------|--------|-----------------------------------------|
-| ESP32 Dev Board       | 1      | Versi 30-pin atau 38-pin                |
-| OLED SSD1306 128x64   | 1      | Layar OLED I2C                          |
-| LED Hijau             | 1      | Warna hijau (absensi berhasil)          |
-| LED Merah             | 1      | Warna merah (gagal / sudah absen)       |
-| Resistor 220Ω         | 2      | Untuk membatasi arus LED                |
-| Breadboard            | 1      | Untuk merangkai komponen                |
-| Kabel jumper          | 10+    | Male-to-male / Female-to-male           |
-| Kabel USB             | 1      | Untuk upload kode dari laptop ke ESP32  |
+| Komponen          | Jumlah | Keterangan                             |
+|-------------------|--------|----------------------------------------|
+| ESP32 Dev Board   | 1      | Versi 30-pin atau 38-pin               |
+| LCD 16×2 I2C      | 1      | Modul dengan adapter I2C (PCF8574)     |
+| Kabel jumper      | 4      | Female-to-Male untuk koneksi I2C       |
+| Kabel USB         | 1      | Untuk upload kode dari laptop ke ESP32 |
 
 ---
 
 ## LANGKAH 1 — LIBRARY YANG WAJIB DIINSTALL (ARDUINO IDE)
 
-Sebelum melakukan upload, pastikan Anda telah menginstal pustaka-pustaka berikut melalui **Library Manager** di Arduino IDE (`Ctrl+Shift+I` atau `Sketch -> Include Library -> Manage Libraries...`):
+Buka **Library Manager** (`Ctrl+Shift+I` atau `Sketch → Include Library → Manage Libraries...`) lalu install:
 
-1. **Adafruit SSD1306** (oleh Adafruit)
-2. **Adafruit GFX Library** (oleh Adafruit)
-3. **ArduinoJson** (oleh Benoit Blanchon - disarankan menggunakan versi 7)
+1. **LiquidCrystal I2C** (oleh Frank de Brabander) — untuk LCD 16×2 via I2C
+2. **ArduinoJson** (oleh Benoit Blanchon) — disarankan versi **6.x** (stabil)
+3. **HTTPClient** — sudah built-in di ESP32 Arduino Core, tidak perlu install manual
+4. **WiFiClientSecure** — sudah built-in di ESP32 Arduino Core
 
 ---
 
-## LANGKAH 2 — SKEMA WIRING
-
-### Koneksi Layar OLED SSD1306 ke ESP32
+## LANGKAH 2 — SKEMA WIRING LCD 16×2 I2C ke ESP32
 
 ```
-OLED SSD1306     ESP32
-─────────────────────────
-VCC          →   3.3V (atau 5V jika modul mendukung 5V)
+LCD 16×2 I2C     ESP32
+──────────────────────────
+VCC          →   VIN  (5V)   ← VIN bukan 3.3V! LCD butuh 5V
 GND          →   GND
-SDA          →   GPIO 21 (SDA)
-SCL          →   GPIO 22 (SCL)
+SDA          →   GPIO 21
+SCL          →   GPIO 22
 ```
 
-### Koneksi LED ke ESP32
+> ⚠️ **Penting:** Gunakan pin **VIN** (5V), bukan 3.3V. LCD 16×2 tidak akan menyala dengan tegangan 3.3V.
 
-```
-LED Hijau (+) → Resistor 220Ω → GPIO 26 → GND (kaki pendek LED)
-LED Merah (+) → Resistor 220Ω → GPIO 27 → GND (kaki pendek LED)
-
-Catatan:
-- Kaki panjang LED = Anoda (+)
-- Kaki pendek LED  = Katoda (−)
-```
-
-### Diagram Wiring Lengkap
+### Diagram Wiring
 
 ```
                     ┌─────────────────────┐
                     │       ESP32          │
                     │                     │
-    OLED SDA ───────┤ GPIO 21             │
-    OLED SCL ───────┤ GPIO 22             │
-    OLED VCC ───────┤ 3.3V           USB  │──── ke Laptop
-    OLED GND ───────┤ GND                 │
-                    │                     │
-    LED Hijau ──R───┤ GPIO 26             │
-    LED Merah ──R───┤ GPIO 27             │
-    LED GND  ───────┤ GND                 │
+    LCD SDA ────────┤ GPIO 21             │
+    LCD SCL ────────┤ GPIO 22             │
+    LCD VCC ────────┤ VIN (5V)       USB  │──── ke Laptop
+    LCD GND ────────┤ GND                 │
                     └─────────────────────┘
-
-    R = Resistor 220Ω
 ```
 
 ---
 
-## LANGKAH 3 — CARI ALAMAT I2C OLED (BIASANYA 0x3C)
+## LANGKAH 3 — CARI ALAMAT I2C LCD (BIASANYA 0x27 atau 0x3F)
 
-Sebagian besar modul OLED SSD1306 menggunakan alamat I2C **0x3C** secara default. Namun, jika layar tidak menyala setelah upload, Anda dapat memverifikasi alamatnya dengan meng-upload sketch I2C Scanner berikut ke ESP32:
+LCD 16×2 dengan adapter PCF8574 umumnya menggunakan alamat **`0x27`**. Jika LCD tidak menyala setelah upload, jalankan **I2C Scanner** berikut:
 
 ```cpp
 #include <Wire.h>
 
 void setup() {
-  Wire.begin(21, 22);
+  Wire.begin(21, 22);   // SDA=21, SCL=22
   Serial.begin(115200);
   Serial.println("\nScanning I2C...");
 
@@ -99,80 +79,289 @@ void loop() {}
 ```
 
 **Cara menjalankan:**
-1. Upload sketch scanner di atas ke ESP32.
-2. Buka **Serial Monitor** (Tools → Serial Monitor) dan set baud rate ke **115200**.
-3. Jika alamat yang terdeteksi bukan `0x3C` (misal `0x3D`), buka file `esp32_absensi.ino` lalu ubah bagian:
+1. Upload sketch scanner ke ESP32.
+2. Buka **Serial Monitor** (Tools → Serial Monitor), baud rate **115200**.
+3. Catat alamat yang muncul. Jika **`0x3F`** (bukan `0x27`), ubah baris di kode utama:
    ```cpp
-   #define SCREEN_ADDRESS 0x3C // Ganti dengan alamat hasil scan Anda
+   LiquidCrystal_I2C lcd(0x3F, 16, 2);  // ganti 0x27 → 0x3F
    ```
 
 ---
 
-## LANGKAH 4 — UPLOAD KODE UTAMA KE ESP32
+## LANGKAH 4 — PENJELASAN API ENDPOINT BACKEND
 
-1. Sambungkan ESP32 ke laptop menggunakan kabel USB.
-2. Buka folder proyek absensi dan buka file **`esp32_absensi/esp32_absensi.ino`** di Arduino IDE.
-3. Pastikan konfigurasi WiFi pada kode sesuai dengan WiFi yang sedang Anda gunakan (laptop & ESP32 wajib berada dalam 1 jaringan WiFi):
-   ```cpp
-   const char* WIFI_SSID     = "BOUTY FAMILLY"; 
-   const char* WIFI_PASSWORD = "Galang14";
-   ```
-4. Pilih board target: **Tools → Board → ESP32 Arduino → ESP32 Dev Module**
-5. Pilih port COM yang terdeteksi: **Tools → Port → COMx** (misal COM3/COM4)
-6. Klik tombol **Upload** (tanda panah kanan `→`).
-   *(Tips: Jika muncul pesan `Connecting....`, tekan dan tahan tombol **BOOT** pada board ESP32 hingga proses penulisan flash dimulai)*
+ESP32 akan mem-polling endpoint berikut secara berkala:
+
+```
+GET https://absensi-6ti3.up.railway.app/api/absensi/terakhir
+```
+
+**Contoh Response (ada absensi):**
+```json
+{
+  "status": "ok",
+  "data": {
+    "nama": "David Soselisa",
+    "status_label": "Tepat Waktu"
+  },
+  "pesan": null
+}
+```
+
+**Contoh Response (belum ada absensi hari ini):**
+```json
+{
+  "status": "ok",
+  "data": null,
+  "pesan": "Belum ada absensi hari ini."
+}
+```
 
 ---
 
-## LANGKAH 5 — CARI IP ADDRESS ESP32
+## LANGKAH 5 — KODE ARDUINO IDE LENGKAP (esp32_lcd.ino)
 
-Setelah upload selesai:
-1. Tetap buka **Serial Monitor** (Baud rate: **115200**).
-2. Tekan tombol **EN/RESET** di board ESP32.
-3. Tunggu hingga muncul informasi status seperti:
-   ```
-   [OK] WiFi Terhubung!
-   [INFO] IP Address ESP32: 192.168.1.15
-   [INFO] HTTP Server aktif di port 80
-   ```
-4. **Catat IP Address tersebut** (layar OLED juga akan menampilkannya selama 3 detik setelah berhasil terkoneksi ke WiFi).
+```cpp
+/**
+ * esp32_lcd.ino — Tampilkan absensi terakhir di LCD 16x2 via I2C
+ * 
+ * Hardware : ESP32 + LCD 16x2 (PCF8574 I2C)
+ * Library  : LiquidCrystal_I2C, ArduinoJson 6.x, WiFiClientSecure, HTTPClient
+ * Backend  : Flask di Railway (HTTPS) — diakses dengan setInsecure() bypass SSL
+ */
+
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <LiquidCrystal_I2C.h>
+
+// ── Konfigurasi WiFi ─────────────────────────────────────────
+const char* WIFI_SSID     = "NAMA_WIFI_KAMU";       // ← Ganti
+const char* WIFI_PASSWORD = "PASSWORD_WIFI_KAMU";   // ← Ganti
+
+// ── URL API Backend (Railway) ─────────────────────────────────
+const char* API_URL = "https://absensi-6ti3.up.railway.app/api/absensi/terakhir";
+
+// ── Konfigurasi LCD 16x2 I2C ─────────────────────────────────
+// Argumen: (alamat_i2c, kolom, baris)
+// Alamat default PCF8574: 0x27 — jika tidak menyala, coba 0x3F
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// ── Interval polling ke server (milliseconds) ─────────────────
+const unsigned long POLLING_INTERVAL = 5000;  // 5 detik
+
+// ── Variabel state ───────────────────────────────────────────
+unsigned long lastPollTime  = 0;
+String        lastNama      = "";
+String        lastStatus    = "";
+
+
+// ── Fungsi: potong string agar muat di LCD 16 kolom ──────────
+// PANDUAN ADAPTIF — jika nama/status dari DB berubah jadi sangat panjang:
+// Fungsi ini memotong otomatis di karakter ke-16. Cukup panggil truncate(str, 16).
+String truncate(String str, int maxLen) {
+  if (str.length() > maxLen) {
+    return str.substring(0, maxLen);
+  }
+  return str;
+}
+
+// ── Fungsi: tampilkan pesan 2 baris di LCD ───────────────────
+void tampilLCD(String baris1, String baris2) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(truncate(baris1, 16));
+  lcd.setCursor(0, 1);
+  lcd.print(truncate(baris2, 16));
+}
+
+
+// ────────────────────────────────────────────────────────────
+void setup() {
+  Serial.begin(115200);
+
+  // Inisialisasi LCD
+  lcd.init();
+  lcd.backlight();
+
+  // Status awal: sedang menghubungkan WiFi
+  tampilLCD("Connecting WiFi", "Please wait...");
+  Serial.println("[ESP32] Menghubungkan ke WiFi...");
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  // WiFi berhasil terhubung
+  Serial.println();
+  Serial.println("[ESP32] WiFi Terhubung!");
+  Serial.print("[ESP32] IP: ");
+  Serial.println(WiFi.localIP());
+
+  tampilLCD("WiFi Connected!", WiFi.localIP().toString());
+  delay(2000);  // Tampilkan IP selama 2 detik
+
+  // Tampilan standby awal
+  tampilLCD("Silakan Absen..", "Scan wajah Anda");
+}
+
+
+// ────────────────────────────────────────────────────────────
+void loop() {
+  unsigned long now = millis();
+
+  // Polling ke server setiap POLLING_INTERVAL ms
+  if (now - lastPollTime >= POLLING_INTERVAL) {
+    lastPollTime = now;
+    pollServer();
+  }
+}
+
+
+// ── Fungsi utama: ambil data dari API backend ─────────────────
+void pollServer() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[ESP32] WiFi terputus, reconnecting...");
+    tampilLCD("WiFi terputus!", "Reconnecting...");
+    WiFi.reconnect();
+    return;
+  }
+
+  // Gunakan WiFiClientSecure dengan setInsecure() untuk bypass SSL Railway
+  WiFiClientSecure client;
+  client.setInsecure();  // Bypass verifikasi sertifikat HTTPS
+
+  HTTPClient http;
+  http.begin(client, API_URL);
+  http.setTimeout(8000);  // Timeout 8 detik
+
+  int httpCode = http.GET();
+  Serial.printf("[HTTP] Response code: %d\n", httpCode);
+
+  if (httpCode == 200) {
+    String payload = http.getString();
+    Serial.println("[HTTP] Payload: " + payload);
+    parseAndDisplay(payload);
+  } else {
+    Serial.printf("[HTTP] Gagal, error: %s\n", http.errorToString(httpCode).c_str());
+    tampilLCD("Server error!", "Code:" + String(httpCode));
+  }
+
+  http.end();
+}
+
+
+// ── Parse JSON dan tampilkan ke LCD ──────────────────────────
+void parseAndDisplay(String json) {
+  // ArduinoJson 6.x — alokasi dokumen JSON
+  StaticJsonDocument<512> doc;
+  DeserializationError err = deserializeJson(doc, json);
+
+  if (err) {
+    Serial.print("[JSON] Parse error: ");
+    Serial.println(err.c_str());
+    tampilLCD("JSON Error!", err.c_str());
+    return;
+  }
+
+  // Cek field "data" dari response backend
+  if (doc["data"].isNull()) {
+    // Belum ada absensi hari ini
+    tampilLCD("Silakan Absen..", "Scan wajah Anda");
+    lastNama   = "";
+    lastStatus = "";
+    return;
+  }
+
+  // Ambil nama dan status dari JSON
+  // PANDUAN ADAPTIF — jika nama key JSON berubah di backend:
+  //   Ganti "nama" dan "status_label" di bawah sesuai key baru dari /api/absensi/terakhir
+  String nama   = String(doc["data"]["nama"]        | "Unknown");
+  String status = String(doc["data"]["status_label"] | "?");
+
+  // Hindari refresh LCD jika data tidak berubah (mengurangi flicker)
+  if (nama == lastNama && status == lastStatus) return;
+  lastNama   = nama;
+  lastStatus = status;
+
+  // Tampilkan di LCD:
+  // Baris 1 (0): Nama mahasiswa  (dipotong maks 16 karakter)
+  // Baris 2 (1): Status kehadiran (dipotong maks 16 karakter)
+  tampilLCD(nama, status);
+
+  Serial.printf("[LCD] Nama: %s | Status: %s\n", nama.c_str(), status.c_str());
+}
+```
 
 ---
 
-## LANGKAH 6 — INTEGRASI DENGAN FLASK (CONFIG.PY)
+## LANGKAH 6 — CARA UPLOAD KE ESP32
 
-Buka file **`config.py`** di folder proyek Anda pada laptop, kemudian aktifkan dan isi IP ESP32 yang didapatkan:
+1. Buka **Arduino IDE**, buat file baru, paste kode di atas.
+2. Isi `WIFI_SSID` dan `WIFI_PASSWORD` sesuai jaringan WiFi Anda.
+3. Pilih board: **Tools → Board → ESP32 Arduino → ESP32 Dev Module**
+4. Pilih port COM yang terdeteksi: **Tools → Port → COMx**
+5. Klik tombol **Upload** (→).
+   > *Tips: Jika muncul `Connecting....`, tekan dan tahan tombol **BOOT** pada board ESP32 hingga proses upload dimulai.*
+
+---
+
+## LANGKAH 7 — TAMPILAN LCD YANG DIHARAPKAN
+
+| Kondisi | Baris 1 | Baris 2 |
+|---------|---------|---------|
+| Saat startup, mencari WiFi | `Connecting WiFi` | `Please wait...` |
+| WiFi berhasil terhubung | `WiFi Connected!` | `192.168.x.x` |
+| Ada absensi, status hadir | `David Soselisa` | `Tepat Waktu` |
+| Ada absensi, terlambat | `David Soselisa` | `Terlambat` |
+| Belum ada absensi | `Silakan Absen..` | `Scan wajah Anda` |
+| Server error | `Server error!` | `Code:500` |
+| WiFi terputus | `WiFi terputus!` | `Reconnecting...` |
+
+---
+
+## BAGIAN: PANDUAN ADAPTIF (ANTISIPASI PERUBAHAN)
+
+### Jika Nama Kolom `status` di Database Berubah
+
+Edit di **`database.py`** fungsi `get_absensi_terakhir_hari_ini()`:
 
 ```python
-# === KONFIGURASI ESP32 ===
-ESP32_ENABLED = True              # Ubah menjadi True untuk mengaktifkan
-ESP32_IP      = "192.168.1.15"   # Masukkan IP ESP32 Anda di sini
-ESP32_PORT    = 80
-ESP32_TIMEOUT = 3
+# Baris yang harus diubah jika nama kolom berubah (misal jadi 'kehadiran'):
+cursor.execute("""
+    SELECT u.nama, a.kehadiran   ← ganti 'a.status' → 'a.kehadiran'
+    FROM absensi a
+    JOIN users u ON a.user_id = u.id
+    WHERE a.tanggal = CURDATE()
+    ORDER BY a.timestamp DESC
+    LIMIT 1
+""")
+row = cursor.fetchone()
+# ...
+'status_label': STATUS_LABEL.get(row['kehadiran'], ...)  ← ganti 'status' → 'kehadiran'
 ```
 
----
+### Jika Nama/Status Sangat Panjang (Melebihi 16 Karakter LCD)
 
-## LANGKAH 7 — VERIFIKASI PENGUJIAN
+Di kode Arduino, fungsi `truncate()` **sudah otomatis memotong** string di karakter ke-16:
 
-Sebelum menjalankan sistem penuh, Anda dapat menguji respons layar OLED & LED menggunakan command prompt (CMD) di laptop:
-
-### 1. Uji Ping ke ESP32:
-```cmd
-curl http://192.168.1.15/ping
+```cpp
+// Contoh: "Muhammad Firmansyah Ramadhan" (28 char) → "Muhammad Firmans" (16 char)
+String truncate(String str, int maxLen) {
+  if (str.length() > maxLen) {
+    return str.substring(0, maxLen);   // ← Ubah maxLen jika pindah ke LCD 20x4
+  }
+  return str;
+}
 ```
-Hasil respons yang diharapkan:
-```json
-{"status":"ok","ip":"192.168.1.15"}
-```
 
-### 2. Kirim Data Absensi Manual (Uji OLED & LED):
-```cmd
-curl -X POST http://192.168.1.15/absensi -H "Content-Type: application/json" -d "{\"nama\":\"Galang Pratama\",\"nim\":\"210010203\",\"status\":\"berhasil\"}"
+Jika suatu saat pindah ke **LCD 20×4**, cukup ubah satu baris:
+```cpp
+tampilLCD(truncate(nama, 20), truncate(status, 20));
 ```
-**Hasil pada Hardware:**
-- Layar OLED menampilkan kotak border dengan header **"ABSENSI BERHASIL"**, baris nama **"Galang Pratama"**, NIM **"210010203"**, dan status **"Status: HADIR OK"**.
-- LED Hijau menyala selama 3 detik, setelah itu layar kembali ke mode Standby ("SISTEM ABSENSI - HADAP KE KAMERA").
 
 ---
 
@@ -180,7 +369,10 @@ curl -X POST http://192.168.1.15/absensi -H "Content-Type: application/json" -d 
 
 | Masalah | Kemungkinan Penyebab | Solusi |
 |---------|---------------------|--------|
-| Layar OLED tidak menyala sama sekali | Kabel VCC/GND atau SDA/SCL terbalik; alamat I2C tidak tepat. | Cek kembali perkabelan. Jalankan I2C scanner untuk memverifikasi alamat (misal `0x3D` atau `0x3C`). |
-| Teks pada OLED terpotong | Nama mahasiswa terlalu panjang. | Kode secara otomatis membatasi nama maksimal 18 karakter agar pas dalam lebar layar OLED. |
-| ESP32 gagal terhubung ke WiFi | SSID/Password salah atau frekuensi WiFi 5GHz (ESP32 hanya mendukung 2.4GHz). | Pastikan konfigurasi SSID/Password benar dan WiFi laptop diset ke 2.4GHz. |
-| Pengiriman data dari Flask timeout | ESP32 dan laptop berada di jaringan WiFi berbeda. | Hubungkan laptop dan ESP32 ke router/hotspot yang sama. |
+| LCD tidak menyala sama sekali | VCC terhubung ke 3.3V, bukan 5V | Pindahkan VCC ke pin **VIN** (5V) di ESP32 |
+| LCD menyala tapi tidak ada teks | Alamat I2C salah | Jalankan I2C Scanner, ubah `0x27` → `0x3F` (atau sebaliknya) |
+| Layar tampil kotak-kotak hitam | Kontras LCD terlalu rendah | Putar **potensiometer biru** di belakang modul I2C perlahan hingga teks muncul |
+| ESP32 gagal terhubung ke WiFi | SSID/Password salah, atau WiFi 5GHz | Pastikan WiFi **2.4GHz** dan konfigurasi SSID/Password benar |
+| HTTP response code -1 | Timeout, Railway sedang cold start | Naikkan `http.setTimeout(8000)` menjadi `15000` ms |
+| JSON Parse error | Backend mengembalikan HTML (error page) | Cek URL `API_URL` sudah benar, buka di browser untuk verifikasi |
+| Teks terpotong di LCD | Nama mahasiswa > 16 karakter | Fungsi `truncate()` sudah menangani ini secara otomatis |

@@ -676,6 +676,31 @@ def absensi_manual():
 # API ENDPOINTS
 # ══════════════════════════════════════════════════════════════
 
+@app.route('/api/absensi/terakhir')
+def api_absensi_terakhir():
+    """Endpoint publik untuk ESP32 — ambil 1 absensi paling baru hari ini.
+
+    Tidak memerlukan login karena ESP32 tidak bisa autentikasi via session.
+    Hanya mengembalikan data minimal (nama + status) — aman dibuka publik.
+
+    Format response:
+        Ada data  : {"status":"ok", "data":{"nama":"...", "status_label":"..."}}
+        Kosong    : {"status":"ok", "data": null, "pesan":"Belum ada absensi hari ini."}
+        Error     : {"status":"error", "pesan":"..."}
+    """
+    try:
+        data = db.get_absensi_terakhir_hari_ini()
+        if data:
+            return jsonify({'status': 'ok', 'data': data, 'pesan': None})
+        return jsonify({
+            'status': 'ok',
+            'data'  : None,
+            'pesan' : 'Belum ada absensi hari ini.'
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'data': None, 'pesan': str(e)}), 500
+
+
 @app.route('/api/absensi/hari-ini')
 @login_required
 def api_absensi_hari_ini():
