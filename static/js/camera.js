@@ -10,9 +10,10 @@ const CameraManager = {
     canvas: null,           // Canvas untuk capture frame
     ctx: null,              // Canvas 2D context
     isActive: false,        // Status kamera aktif/tidak
+    isProcessing: false,    // Pengunci: frame baru hanya dikirim setelah server menjawab
     intervalId: null,       // Interval pengiriman frame
     socket: null,           // SocketIO connection
-    frameInterval: 500,     // Kirim frame setiap 500ms
+    frameInterval: 800,     // Kirim frame setiap 800ms (dinaikkan dari 500ms)
     lastResult: null,       // Hasil recognition terakhir
 
     /**
@@ -172,6 +173,11 @@ const CameraManager = {
 
         this.intervalId = setInterval(() => {
             if (!this.isActive || !this.video.videoWidth) return;
+            // Pengunci: skip frame jika server belum menjawab request sebelumnya
+            if (this.isProcessing) {
+                console.log('[CAMERA] Frame skipped — menunggu respons server.');
+                return;
+            }
             this._captureAndSend();
         }, this.frameInterval);
     },
@@ -200,6 +206,9 @@ const CameraManager = {
         // kualitas frame lebih mendekati foto training sehingga confidence LBPH lebih akurat)
         const frameData = this.canvas.toDataURL('image/jpeg', 0.85);
 
+        // Aktifkan pengunci sebelum kirim — dilepas di _handleRecognitionResult
+        this.isProcessing = true;
+
         // Kirim via SocketIO (lebih cepat dari HTTP)
         if (this.socket && this.socket.connected) {
             this.socket.emit('process_frame', { frame: frameData });
@@ -207,6 +216,14 @@ const CameraManager = {
             // Fallback: kirim via HTTP POST
             this._sendFrameHTTP(frameData);
         }
+
+        // Timeout pengaman: lepas kunci setelah 5 detik jika server tidak menjawab
+        setTimeout(() => {
+            if (this.isProcessing) {
+                console.warn('[CAMERA] Timeout 5s — melepas kunci isProcessing.');
+                this.isProcessing = false;
+            }
+        }, 5000);
     },
 
     /**
@@ -230,6 +247,8 @@ const CameraManager = {
      * Handle hasil recognition dari server
      */
     _handleRecognitionResult: function (data) {
+        // Lepas kunci — server sudah menjawab, frame berikutnya boleh dikirim
+        this.isProcessing = false;
         this.lastResult = data;
         var indicatorSpan = document.querySelector('#processing-indicator span:last-child');
 

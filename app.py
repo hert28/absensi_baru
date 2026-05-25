@@ -1051,9 +1051,9 @@ def _proses_recognition(frame):
             'spoofing': spoof_result
         }
 
-    # Reset counter setelah berhasil verifikasi
-    _consecutive_tracker['user_id'] = None
-    _consecutive_tracker['count'] = 0
+    # CATATAN: tracker TIDAK direset di sini — hanya direset setelah absensi
+    # berhasil disimpan atau sudah absen (duplikat).
+    # Jika jadwal tidak aktif, tracker tetap di angka required agar tidak cycling.
 
     user_id = result['user_id']
     confidence = result['confidence']
@@ -1073,7 +1073,12 @@ def _proses_recognition(frame):
     waktu_sekarang = datetime.now().strftime('%H:%M:%S')
     jadwal_list = db.get_jadwal_aktif(hari, waktu_sekarang)
 
+    print(f'[DEBUG] Cari jadwal: hari={hari}, waktu={waktu_sekarang}, '
+          f'ditemukan={len(jadwal_list)} jadwal aktif')
+
     if not jadwal_list:
+        print(f'[DEBUG] Tidak ada jadwal aktif — periksa jadwal di database '
+              f'untuk hari {hari} sekitar jam {waktu_sekarang}')
         return {
             'status': 'error',
             'tipe': 'no_jadwal',
@@ -1090,6 +1095,9 @@ def _proses_recognition(frame):
             break
 
     if not jadwal:
+        print(f'[DEBUG] Jadwal aktif ada {len(jadwal_list)} tapi TIDAK ada '
+              f'yang cocok dengan kelas_id={user["kelas_id"]} (kelas mahasiswa). '
+              f'Jadwal tersedia: {[j["kelas_id"] for j in jadwal_list]}')
         return {
             'status': 'error',
             'tipe': 'no_jadwal',
@@ -1103,6 +1111,9 @@ def _proses_recognition(frame):
     sudah = db.cek_sudah_absen(user_id, jadwal['id'], tanggal_hari_ini)
 
     if sudah:
+        # Reset tracker karena mahasiswa ini sudah absen hari ini
+        _consecutive_tracker['user_id'] = None
+        _consecutive_tracker['count'] = 0
         # Kirim notifikasi duplikat ke ESP32
         _kirim_ke_esp32(user['nama'], user['nim'], 'duplikat')
         return {
@@ -1147,6 +1158,12 @@ def _proses_recognition(frame):
             'pesan': 'Gagal menyimpan absensi ke database.',
             'spoofing': spoof_result
         }
+
+    # ── Reset tracker HANYA setelah absensi berhasil tercatat ──
+    _consecutive_tracker['user_id'] = None
+    _consecutive_tracker['count'] = 0
+    print(f'[ABSENSI] Berhasil dicatat: user_id={user_id}, nama={user["nama"]}, '
+          f'jadwal={jadwal["nama_mk"]}, status={status_absensi}')
 
     # ── 9. Kirim ke ESP32 ──
     esp_status = 'berhasil'
