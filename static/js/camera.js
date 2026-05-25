@@ -196,8 +196,9 @@ const CameraManager = {
         // Gambar video ke canvas
         this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
 
-        // Konversi ke base64 JPEG (kompresi 70%)
-        const frameData = this.canvas.toDataURL('image/jpeg', 0.7);
+        // Konversi ke base64 JPEG (kompresi 85% — dinaikkan dari 70% agar
+        // kualitas frame lebih mendekati foto training sehingga confidence LBPH lebih akurat)
+        const frameData = this.canvas.toDataURL('image/jpeg', 0.85);
 
         // Kirim via SocketIO (lebih cepat dari HTTP)
         if (this.socket && this.socket.connected) {
@@ -254,10 +255,10 @@ const CameraManager = {
                 this._throttledToast('info', 'Sudah Absen', data.pesan || 'Mahasiswa sudah absen hari ini.');
             } else if (data.tipe === 'unknown') {
                 if (indicatorSpan) indicatorSpan.textContent = '? Wajah tidak dikenali';
-                // this._throttledToast('warning', 'Tidak Dikenali', data.pesan || 'Wajah tidak cocok dengan database.');
+                this._throttledToast('warning', 'Tidak Dikenali', data.pesan || 'Wajah tidak cocok dengan database.');
             } else if (data.tipe === 'no_jadwal') {
                 if (indicatorSpan) indicatorSpan.textContent = '⏰ Tidak ada jadwal';
-                // this._throttledToast('warning', 'Tidak Ada Jadwal', data.pesan || 'Tidak ada jadwal aktif saat ini.');
+                this._throttledToast('warning', 'Tidak Ada Jadwal', data.pesan || 'Tidak ada jadwal aktif saat ini.');
             } else {
                 if (indicatorSpan) indicatorSpan.textContent = 'Memproses...';
                 console.warn('[CAMERA] Recognition error:', data.pesan);

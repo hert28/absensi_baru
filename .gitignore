@@ -11,9 +11,10 @@ env/
 dataset/*
 !dataset/.gitkeep
 
-# ── Model LBPH (ukuran besar) — folder tetap ada, isi diabaikan
-models/*
-!models/.gitkeep
+# ── Model LBPH — Di-commit agar Railway punya file model saat deploy
+# Trainer.yml biasanya < 5MB, aman untuk git
+# Jika ukuran terlalu besar, gunakan Railway Volume sebagai alternatif
+!models/trainer.yml
 
 # ── File Sementara Python ────────────────────────────────────
 __pycache__/

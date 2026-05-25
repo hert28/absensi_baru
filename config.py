@@ -16,7 +16,10 @@ DB_CONFIG = {
 DATASET_PATH            = 'dataset'
 MODEL_PATH              = 'models/trainer.yml'
 SNAPSHOT_PATH           = 'snapshots'
-CONFIDENCE_THRESHOLD    = 55
+# Threshold LBPH: nilai adalah distance metric (rendah=mirip, tinggi=jauh)
+# Dinaikkan dari 55 ke 75 untuk mengakomodasi JPEG compression 70-85%
+# yang dilakukan browser saat mengirim frame ke server
+CONFIDENCE_THRESHOLD    = 75
 FOTO_PER_USER           = 50
 CAMERA_INDEX            = 0
 TOLERANSI_MENIT         = 15
