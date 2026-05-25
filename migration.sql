@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS absensi (
     jadwal_id     INT  NOT NULL,
     tanggal       DATE NOT NULL,
     waktu_absen   TIME,
-    status        ENUM('hadir','terlambat','izin','alpha') NOT NULL,
+    status        ENUM('hadir','terlambat','izin','sakit','alpha') NOT NULL,
+    alasan        VARCHAR(255) NULL,
     snapshot_path VARCHAR(255),
     dibuat_manual BOOLEAN  DEFAULT FALSE,
     timestamp     DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -69,6 +70,11 @@ CREATE TABLE IF NOT EXISTS absensi (
     FOREIGN KEY (jadwal_id) REFERENCES jadwal(id)  ON DELETE CASCADE,
     UNIQUE KEY uq_absensi (user_id, jadwal_id, tanggal)
 ) ENGINE=InnoDB;
+
+-- 6b. ALTER TABLE untuk database yang sudah ada (Railway)
+-- run_migration.py menggunakan try/except, jadi aman jika kolom sudah ada
+ALTER TABLE absensi ADD COLUMN alasan VARCHAR(255) NULL AFTER status;
+ALTER TABLE absensi MODIFY COLUMN status ENUM('hadir','terlambat','izin','sakit','alpha') NOT NULL
 
 -- 7. spoofing_log
 CREATE TABLE IF NOT EXISTS spoofing_log (

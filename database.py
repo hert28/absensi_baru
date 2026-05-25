@@ -489,13 +489,28 @@ def catat_absensi(user_id, jadwal_id, tanggal, waktu_absen, status,
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            """INSERT INTO absensi
-               (user_id, jadwal_id, tanggal, waktu_absen, status, alasan, snapshot_path, dibuat_manual)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-            (user_id, jadwal_id, tanggal, waktu_absen, status,
-             alasan, snapshot_path, dibuat_manual)
-        )
+        try:
+            # Coba INSERT dengan kolom alasan (schema lengkap)
+            cursor.execute(
+                """INSERT INTO absensi
+                   (user_id, jadwal_id, tanggal, waktu_absen, status, alasan, snapshot_path, dibuat_manual)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (user_id, jadwal_id, tanggal, waktu_absen, status,
+                 alasan, snapshot_path, dibuat_manual)
+            )
+        except Exception as e_inner:
+            # Fallback: jika kolom alasan belum ada (error 1054), coba tanpa alasan
+            if '1054' in str(e_inner) or 'alasan' in str(e_inner).lower():
+                print(f'[DB] Fallback INSERT tanpa kolom alasan (jalankan migration untuk fix permanen)')
+                cursor.execute(
+                    """INSERT INTO absensi
+                       (user_id, jadwal_id, tanggal, waktu_absen, status, snapshot_path, dibuat_manual)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (user_id, jadwal_id, tanggal, waktu_absen, status,
+                     snapshot_path, dibuat_manual)
+                )
+            else:
+                raise  # Re-raise error lain (misal UNIQUE constraint)
         conn.commit()
         absensi_id = cursor.lastrowid
         cursor.close(); conn.close()
@@ -523,23 +538,41 @@ def catat_absensi_manual(user_id, jadwal_id, tanggal, status, alasan=None):
 
         waktu_now = datetime.now().strftime('%H:%M:%S')
 
+        def _try_execute(sql_with_alasan, params_with, sql_without, params_without):
+            """Coba eksekusi dengan alasan, fallback tanpa alasan jika kolom belum ada."""
+            try:
+                cursor.execute(sql_with_alasan, params_with)
+            except Exception as e:
+                if '1054' in str(e) or 'alasan' in str(e).lower():
+                    print('[DB] Fallback tanpa kolom alasan (jalankan migration)')
+                    cursor.execute(sql_without, params_without)
+                else:
+                    raise
+
         if existing:
             # Update record yang sudah ada
-            cursor.execute(
+            _try_execute(
                 """UPDATE absensi SET status=%s, alasan=%s, dibuat_manual=TRUE,
                    waktu_absen=%s WHERE id=%s""",
-                (status, alasan, waktu_now, existing['id'])
+                (status, alasan, waktu_now, existing['id']),
+                """UPDATE absensi SET status=%s, dibuat_manual=TRUE,
+                   waktu_absen=%s WHERE id=%s""",
+                (status, waktu_now, existing['id'])
             )
             conn.commit()
             cursor.close(); conn.close()
             return {'aksi': 'update', 'id': existing['id'], 'status_lama': existing['status']}
         else:
             # Insert baru
-            cursor.execute(
+            _try_execute(
                 """INSERT INTO absensi
                    (user_id, jadwal_id, tanggal, waktu_absen, status, alasan, dibuat_manual)
                    VALUES (%s, %s, %s, %s, %s, %s, TRUE)""",
-                (user_id, jadwal_id, tanggal, waktu_now, status, alasan)
+                (user_id, jadwal_id, tanggal, waktu_now, status, alasan),
+                """INSERT INTO absensi
+                   (user_id, jadwal_id, tanggal, waktu_absen, status, dibuat_manual)
+                   VALUES (%s, %s, %s, %s, %s, TRUE)""",
+                (user_id, jadwal_id, tanggal, waktu_now, status)
             )
             conn.commit()
             absensi_id = cursor.lastrowid
