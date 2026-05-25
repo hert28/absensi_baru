@@ -701,6 +701,27 @@ def api_absensi_terakhir():
         return jsonify({'status': 'error', 'data': None, 'pesan': str(e)}), 500
 
 
+@app.route('/api/esp32/status')
+def api_esp32_status():
+    """Endpoint publik khusus ESP32 LCD — tidak perlu login.
+
+    Mengembalikan 1 absensi paling baru hari ini dengan format JSON ringkas
+    yang langsung bisa dibaca oleh kode Arduino (doc["nama"], doc["status"]).
+
+    Response ada data : {"nama": "David Soselisa", "status": "Terlambat"}
+    Response kosong   : {"nama": null, "status": null}
+    Response error    : {"nama": null, "status": null, "error": "..."}
+    """
+    try:
+        data = db.get_absensi_untuk_esp32()
+        if data:
+            return jsonify({'nama': data['nama'], 'status': data['status']})
+        return jsonify({'nama': None, 'status': None})
+    except Exception as e:
+        print(f'[ESP32] Error api_esp32_status: {e}')
+        return jsonify({'nama': None, 'status': None, 'error': str(e)}), 500
+
+
 @app.route('/api/absensi/hari-ini')
 @login_required
 def api_absensi_hari_ini():

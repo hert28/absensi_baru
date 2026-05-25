@@ -665,6 +665,53 @@ def get_absensi_terakhir_hari_ini():
         return None
 
 
+def get_absensi_untuk_esp32():
+    """Ambil 1 absensi paling baru hari ini khusus untuk endpoint /api/esp32/status.
+
+    JOIN: absensi (a) → users (u) — nama tabel asli di database adalah 'users'.
+
+    Returns:
+        {"nama": str, "status": str}  saat ada data hari ini
+        None                           saat belum ada absensi
+
+    PANDUAN ADAPTIF:
+        Jika nama kolom 'status' di tabel absensi berubah, ganti 'a.status'
+        pada baris SELECT dan key row['status'] di dict STATUS_ESP32 di bawah.
+    """
+    # Mapping ENUM database → label yang dikirim ke ESP32 / LCD
+    # Jika nilai ENUM bertambah/berubah, edit dict ini saja
+    STATUS_ESP32 = {
+        'hadir'    : 'Hadir',
+        'terlambat': 'Terlambat',
+        'izin'     : 'Izin',
+        'sakit'    : 'Sakit',
+        'alpha'    : 'Alpha',
+    }
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT u.nama, a.status
+            FROM   absensi a
+            JOIN   users   u ON a.user_id = u.id
+            WHERE  a.tanggal = CURDATE()
+            ORDER  BY a.timestamp DESC
+            LIMIT  1
+        """)
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if not row:
+            return None
+        return {
+            'nama'  : row['nama'],
+            'status': STATUS_ESP32.get(row['status'], row['status'].capitalize())
+        }
+    except Exception as e:
+        print(f'[DB] Error get_absensi_untuk_esp32: {e}')
+        return None
+
+
 def get_rekap_absensi(kelas_id=None, tanggal_dari=None, tanggal_sampai=None,
                       matakuliah_id=None):
     """Ambil rekap absensi dengan filter opsional."""
