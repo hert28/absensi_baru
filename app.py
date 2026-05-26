@@ -7,7 +7,20 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
+
+# ── Zona Waktu WITA (UTC+8) ────────────────────────────────────
+# Railway server berjalan di UTC. Semua pencatatan waktu harus
+# dikonversi ke WITA agar tanggal dan jam absensi akurat.
+WITA = timezone(timedelta(hours=8))
+
+def now_wita() -> datetime:
+    """Waktu sekarang dalam zona WITA (UTC+8)."""
+    return datetime.now(WITA)
+
+def today_wita() -> date:
+    """Tanggal hari ini dalam zona WITA (UTC+8)."""
+    return datetime.now(WITA).date()
 import os
 import base64
 import threading
@@ -522,7 +535,7 @@ def absensi_export():
             a.get('status', ''), a.get('alasan', '') or '-'
         ]
 
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = now_wita().strftime('%Y%m%d_%H%M%S')
 
     if fmt == 'xlsx':
         # ── Export Excel ──
@@ -611,7 +624,7 @@ def laporan_index():
     periode = request.args.get('periode', 'bulan')
 
     # Tentukan rentang tanggal berdasarkan periode
-    today = date.today()
+    today = today_wita()
     if periode == 'bulan':
         tanggal_dari  = today.replace(day=1).isoformat()
         tanggal_sampai = today.isoformat()
@@ -767,7 +780,7 @@ def api_absensi_manual():
     if not user:
         return jsonify({'status': 'error', 'pesan': 'Mahasiswa tidak ditemukan.'}), 404
 
-    tanggal = date.today()
+    tanggal = today_wita()
     hasil = db.catat_absensi_manual(int(user_id), int(jadwal_id), tanggal, status, alasan)
 
     if hasil:
@@ -979,7 +992,7 @@ def _simpan_snapshot(frame, user_id):
     """Simpan snapshot bukti absensi ke folder snapshots/."""
     try:
         os.makedirs(SNAPSHOT_PATH, exist_ok=True)
-        now = datetime.now()
+        now = now_wita()
         filename = f"{user_id}_{now.strftime('%Y%m%d_%H%M%S')}.jpg"
         filepath = os.path.join(SNAPSHOT_PATH, filename)
         cv2.imwrite(filepath, frame)
@@ -1009,7 +1022,7 @@ def _get_nama_hari():
         0: 'Senin', 1: 'Selasa', 2: 'Rabu',
         3: 'Kamis', 4: 'Jumat', 5: 'Sabtu', 6: 'Minggu'
     }
-    return hari_map.get(datetime.now().weekday(), '')
+    return hari_map.get(now_wita().weekday(), '')
 
 
 def _proses_recognition(frame):
@@ -1116,7 +1129,7 @@ def _proses_recognition(frame):
 
     # ── 4. Cari jadwal aktif hari ini ──
     hari = _get_nama_hari()
-    waktu_sekarang = datetime.now().strftime('%H:%M:%S')
+    waktu_sekarang = now_wita().strftime('%H:%M:%S')
     jadwal_list = db.get_jadwal_aktif(hari, waktu_sekarang)
 
     print(f'[DEBUG] Cari jadwal: hari={hari}, waktu={waktu_sekarang}, '
@@ -1153,7 +1166,7 @@ def _proses_recognition(frame):
         }
 
     # ── 5. Cek duplikasi absensi ──
-    tanggal_hari_ini = date.today()
+    tanggal_hari_ini = today_wita()
     sudah = db.cek_sudah_absen(user_id, jadwal['id'], tanggal_hari_ini)
 
     if sudah:
@@ -1361,8 +1374,8 @@ def _auto_alpha_checker():
         _time.sleep(60)  # Cek setiap 60 detik
         try:
             hari = _get_nama_hari()
-            waktu_sekarang = datetime.now().strftime('%H:%M:%S')
-            tanggal = date.today()
+            waktu_sekarang = now_wita().strftime('%H:%M:%S')
+            tanggal = today_wita()
 
             # Ambil semua jadwal yang sudah selesai hari ini
             jadwal_selesai = db.get_jadwal_selesai_hari_ini(hari, waktu_sekarang)

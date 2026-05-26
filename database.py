@@ -3,7 +3,21 @@
 
 import mysql.connector
 from config import DB_CONFIG
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+
+# ── Zona Waktu WITA (UTC+8) ────────────────────────────────────
+# Semua pencatatan waktu dan filter tanggal menggunakan WITA.
+# CURDATE() di MySQL Railway ikut UTC, sehingga HARUS diganti
+# dengan parameter Python _today_wita() agar tanggal akurat.
+WITA = timezone(timedelta(hours=8))
+
+def _now_wita() -> datetime:
+    """Waktu sekarang dalam WITA (UTC+8) untuk semua query database."""
+    return datetime.now(WITA)
+
+def _today_wita() -> date:
+    """Tanggal hari ini dalam WITA (UTC+8)."""
+    return datetime.now(WITA).date()
 
 
 def get_connection():
@@ -536,7 +550,7 @@ def catat_absensi_manual(user_id, jadwal_id, tanggal, status, alasan=None):
         )
         existing = cursor.fetchone()
 
-        waktu_now = datetime.now().strftime('%H:%M:%S')
+        waktu_now = _now_wita().strftime('%H:%M:%S')
 
         def _try_execute(sql_with_alasan, params_with, sql_without, params_without):
             """Coba eksekusi dengan alasan, fallback tanpa alasan jika kolom belum ada."""
@@ -614,7 +628,7 @@ def get_absensi_hari_ini():
             JOIN matakuliah m ON j.matakuliah_id = m.id
             WHERE a.tanggal = %s
             ORDER BY a.waktu_absen DESC
-        """, (date.today(),))
+        """, (_today_wita(),))
         hasil = cursor.fetchall()
         cursor.close(); conn.close()
         return hasil
@@ -648,10 +662,10 @@ def get_absensi_terakhir_hari_ini():
             SELECT u.nama, a.status
             FROM absensi a
             JOIN users u ON a.user_id = u.id
-            WHERE a.tanggal = CURDATE()
+            WHERE a.tanggal = %s
             ORDER BY a.timestamp DESC
             LIMIT 1
-        """)
+        """, (_today_wita(),))
         row = cursor.fetchone()
         cursor.close(); conn.close()
         if not row:
@@ -694,10 +708,10 @@ def get_absensi_untuk_esp32():
             SELECT u.nama, a.status
             FROM   absensi a
             JOIN   users   u ON a.user_id = u.id
-            WHERE  a.tanggal = CURDATE()
+            WHERE  a.tanggal = %s
             ORDER  BY a.timestamp DESC
             LIMIT  1
-        """)
+        """, (_today_wita(),))
         row = cursor.fetchone()
         cursor.close()
         conn.close()
@@ -963,12 +977,12 @@ def get_statistik_dashboard():
         cursor.execute("""
             SELECT status, COUNT(*) as jumlah
             FROM absensi WHERE tanggal = %s GROUP BY status
-        """, (date.today(),))
+        """, (_today_wita(),))
         status_hari_ini = {r['status']: r['jumlah'] for r in cursor.fetchall()}
 
         # Kelas aktif hari ini (kelas yang punya jadwal hari ini)
         hari_map = {0:'Senin',1:'Selasa',2:'Rabu',3:'Kamis',4:'Jumat',5:'Sabtu',6:'Minggu'}
-        hari_ini = hari_map.get(datetime.now().weekday(), '')
+        hari_ini = hari_map.get(_now_wita().weekday(), '')
         cursor.execute("""
             SELECT COUNT(DISTINCT m.kelas_id) as total
             FROM jadwal j
