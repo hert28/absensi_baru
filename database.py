@@ -726,6 +726,52 @@ def get_absensi_untuk_esp32():
         return None
 
 
+def get_absensi_5detik_terakhir():
+    """Ambil semua absensi yang dicatat dalam 5 detik terakhir untuk ESP32 multi-face.
+
+    Kolom 'timestamp' di tabel absensi diisi oleh MySQL (DEFAULT CURRENT_TIMESTAMP = UTC).
+    Oleh karena itu batas waktu 5 detik dihitung menggunakan UTC Python, bukan WITA.
+
+    Returns:
+        list of dict [{"nama": str, "status": str}] — selalu list, [] jika kosong
+    """
+    STATUS_ESP32 = {
+        'hadir':     'Hadir',
+        'terlambat': 'Terlambat',
+        'izin':      'Izin',
+        'sakit':     'Sakit',
+        'alpha':     'Alpha',
+    }
+    try:
+        from datetime import timezone as _tz
+        # timestamp MySQL Railway = UTC, jadi bandingkan dengan UTC Python
+        batas_utc = datetime.now(_tz.utc) - timedelta(seconds=5)
+
+        conn   = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT u.nama, a.status
+            FROM   absensi a
+            JOIN   users   u ON a.user_id = u.id
+            WHERE  a.tanggal  = %s
+              AND  a.timestamp >= %s
+            ORDER  BY a.timestamp DESC
+        """, (_today_wita(), batas_utc.strftime('%Y-%m-%d %H:%M:%S')))
+        rows = cursor.fetchall()
+        cursor.close(); conn.close()
+
+        return [
+            {
+                'nama'  : r['nama'],
+                'status': STATUS_ESP32.get(r['status'], r['status'].capitalize())
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        print(f'[DB] Error get_absensi_5detik_terakhir: {e}')
+        return []
+
+
 def get_rekap_absensi(kelas_id=None, tanggal_dari=None, tanggal_sampai=None,
                       matakuliah_id=None):
     """Ambil rekap absensi dengan filter opsional."""

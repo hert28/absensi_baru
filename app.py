@@ -42,8 +42,9 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 # Status kamera global
 camera_state = {'active': False}
 
-# Tracker verifikasi konsekutif — wajah harus dikenali N kali berturut-turut
-_consecutive_tracker = {'user_id': None, 'count': 0}
+# Tracker verifikasi konsekutif — per user_id, untuk mendukung multi-face
+# Key = user_id (int), Value = jumlah frame konsekutif terdeteksi
+_consecutive_trackers: dict = {}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -726,13 +727,11 @@ def api_esp32_status():
     Response error    : {"nama": null, "status": null, "error": "..."}
     """
     try:
-        data = db.get_absensi_untuk_esp32()
-        if data:
-            return jsonify({'nama': data['nama'], 'status': data['status']})
-        return jsonify({'nama': None, 'status': None})
+        data = db.get_absensi_5detik_terakhir()  # selalu list
+        return jsonify(data)                      # [] jika kosong
     except Exception as e:
         print(f'[ESP32] Error api_esp32_status: {e}')
-        return jsonify({'nama': None, 'status': None, 'error': str(e)}), 500
+        return jsonify([]), 500
 
 
 @app.route('/api/absensi/hari-ini')
@@ -1025,236 +1024,168 @@ def _get_nama_hari():
     return hari_map.get(now_wita().weekday(), '')
 
 
-def _proses_recognition(frame):
-    """Proses satu frame: anti-spoofing → recognition → absensi.
+def _proses_recognition_multi(frame):
+    """Proses satu frame untuk SEMUA wajah yang terdeteksi (multi-face).
 
-    Alur lengkap sesuai context.md bagian 5.4:
-    1. Cek anti-spoofing
-    2. Predict wajah dengan LBPH
-    3. Cari jadwal aktif hari ini
-    4. Cek duplikasi absensi
-    5. Tentukan status (hadir/terlambat)
-    6. Simpan snapshot + catat absensi
-    7. Kirim ke ESP32
+    Menggantikan _proses_recognition() yang hanya single-face.
+    Alur: anti-spoofing → predict() semua wajah → loop tracker per user
+          → cari jadwal → cek duplikat → catat absensi massal.
 
     Returns:
-        dict hasil proses untuk dikirim ke client
+        list of dict — satu dict per wajah yang diproses
     """
     from face.anti_spoofing import check as spoofing_check
-    from face.recognition import predict_single
+    from face.recognition import predict  # predict() bukan predict_single()
 
-    # ── 1. Anti-spoofing ──
+    # ── 1. Anti-spoofing pada seluruh frame ──
     spoof_result = spoofing_check(frame)
 
     if not spoof_result['is_real']:
-        # Spoofing terdeteksi — simpan bukti ke spoofing_log
         snapshot = _simpan_snapshot(frame, 'spoofing')
         db.catat_spoofing(snapshot, spoof_result['score'])
-        return {
-            'status': 'error',
-            'tipe': 'spoofing',
-            'score': spoof_result['score'],
+        return [{
+            'status': 'error', 'tipe': 'spoofing',
             'pesan': 'Spoofing terdeteksi! Gunakan wajah asli.',
             'spoofing': spoof_result
-        }
+        }]
 
     if spoof_result['label'] == 'NO_FACE':
-        return {
-            'status': 'skip',
-            'tipe': 'no_face',
-            'pesan': 'Tidak ada wajah terdeteksi.',
-            'spoofing': spoof_result
-        }
+        return [{'status': 'skip', 'tipe': 'no_face',
+                 'pesan': 'Tidak ada wajah terdeteksi.', 'spoofing': spoof_result}]
 
-    # ── 2. Predict wajah dengan LBPH ──
-    result = predict_single(frame)
+    # ── 2. Predict SEMUA wajah dalam frame ──
+    predictions = predict(frame)  # List[{user_id, confidence, bbox, dikenali}]
 
-    if result is None:
-        return {
-            'status': 'skip',
-            'tipe': 'no_face',
-            'pesan': 'Wajah tidak terdeteksi untuk recognition.',
-            'spoofing': spoof_result
-        }
+    if not predictions:
+        return [{'status': 'skip', 'tipe': 'no_face',
+                 'pesan': 'Tidak ada wajah terdeteksi.', 'spoofing': spoof_result}]
 
-    # Log confidence untuk debug
-    print(f'[ABSENSI] Predict: user_id={result["user_id"]}, '
-          f'conf={result["confidence"]:.1f}, dikenali={result["dikenali"]}')
+    # ── 3. Reset tracker untuk user yang menghilang dari frame ──
+    uid_di_frame = {p['user_id'] for p in predictions if p['dikenali']}
+    for uid in list(_consecutive_trackers.keys()):
+        if uid not in uid_di_frame:
+            del _consecutive_trackers[uid]
 
-    if not result['dikenali']:
-        # Reset counter konsekutif saat wajah tidak dikenali
-        _consecutive_tracker['user_id'] = None
-        _consecutive_tracker['count'] = 0
-        return {
-            'status': 'error',
-            'tipe': 'unknown',
-            'confidence': result['confidence'],
-            'pesan': f'Wajah tidak dikenali (confidence: {result["confidence"]}).',
-            'spoofing': spoof_result
-        }
-
-    # ── Verifikasi konsekutif: harus 3x berturut-turut user yang SAMA ──
-    detected_uid = result['user_id']
-    if _consecutive_tracker['user_id'] == detected_uid:
-        _consecutive_tracker['count'] += 1
-    else:
-        _consecutive_tracker['user_id'] = detected_uid
-        _consecutive_tracker['count'] = 1
-
-    required = 3  # Minimal 3 frame konsekutif
-    if _consecutive_tracker['count'] < required:
-        return {
-            'status': 'skip',
-            'tipe': 'verifying',
-            'pesan': f'Memverifikasi wajah... ({_consecutive_tracker["count"]}/{required})',
-            'spoofing': spoof_result
-        }
-
-    # CATATAN: tracker TIDAK direset di sini — hanya direset setelah absensi
-    # berhasil disimpan atau sudah absen (duplikat).
-    # Jika jadwal tidak aktif, tracker tetap di angka required agar tidak cycling.
-
-    user_id = result['user_id']
-    confidence = result['confidence']
-
-    # ── 3. Ambil data mahasiswa ──
-    user = db.get_user_by_id(user_id)
-    if not user:
-        return {
-            'status': 'error',
-            'tipe': 'user_not_found',
-            'pesan': f'User ID {user_id} tidak ditemukan di database.',
-            'spoofing': spoof_result
-        }
-
-    # ── 4. Cari jadwal aktif hari ini ──
-    hari = _get_nama_hari()
-    waktu_sekarang = now_wita().strftime('%H:%M:%S')
-    jadwal_list = db.get_jadwal_aktif(hari, waktu_sekarang)
-
-    print(f'[DEBUG] Cari jadwal: hari={hari}, waktu={waktu_sekarang}, '
-          f'ditemukan={len(jadwal_list)} jadwal aktif')
-
-    if not jadwal_list:
-        print(f'[DEBUG] Tidak ada jadwal aktif — periksa jadwal di database '
-              f'untuk hari {hari} sekitar jam {waktu_sekarang}')
-        return {
-            'status': 'error',
-            'tipe': 'no_jadwal',
-            'pesan': f'Tidak ada jadwal aktif saat ini ({hari} {waktu_sekarang}).',
-            'data': {'nama': user['nama'], 'nim': user['nim']},
-            'spoofing': spoof_result
-        }
-
-    # Cari jadwal yang sesuai kelas mahasiswa
-    jadwal = None
-    for j in jadwal_list:
-        if j['kelas_id'] == user['kelas_id']:
-            jadwal = j
-            break
-
-    if not jadwal:
-        print(f'[DEBUG] Jadwal aktif ada {len(jadwal_list)} tapi TIDAK ada '
-              f'yang cocok dengan kelas_id={user["kelas_id"]} (kelas mahasiswa). '
-              f'Jadwal tersedia: {[j["kelas_id"] for j in jadwal_list]}')
-        return {
-            'status': 'error',
-            'tipe': 'no_jadwal',
-            'pesan': f'Tidak ada jadwal untuk kelas {user.get("nama_kelas", "")} saat ini.',
-            'data': {'nama': user['nama'], 'nim': user['nim']},
-            'spoofing': spoof_result
-        }
-
-    # ── 5. Cek duplikasi absensi ──
+    # ── 4. Siapkan konteks jadwal sekali untuk semua wajah ──
+    hari             = _get_nama_hari()
+    waktu_sekarang   = now_wita().strftime('%H:%M:%S')
     tanggal_hari_ini = today_wita()
-    sudah = db.cek_sudah_absen(user_id, jadwal['id'], tanggal_hari_ini)
+    jadwal_list      = db.get_jadwal_aktif(hari, waktu_sekarang)
 
-    if sudah:
-        # Reset tracker karena mahasiswa ini sudah absen hari ini
-        _consecutive_tracker['user_id'] = None
-        _consecutive_tracker['count'] = 0
-        # Kirim notifikasi duplikat ke ESP32
-        _kirim_ke_esp32(user['nama'], user['nim'], 'duplikat')
-        return {
-            'status': 'error',
-            'tipe': 'duplikat',
-            'pesan': f'{user["nama"]} sudah absen untuk {jadwal["nama_mk"]} hari ini.',
+    print(f'[MULTI] Cari jadwal: hari={hari}, waktu={waktu_sekarang}, '
+          f'ditemukan={len(jadwal_list)}, wajah_terdeteksi={len(predictions)}')
+
+    hasil_list = []
+
+    # ── 5. Loop setiap wajah ──
+    for pred in predictions:
+
+        if not pred['dikenali']:
+            hasil_list.append({
+                'status': 'error', 'tipe': 'unknown',
+                'confidence': pred['confidence'],
+                'pesan': f'Wajah tidak dikenali (conf: {pred["confidence"]:.1f}).'
+            })
+            continue
+
+        uid = pred['user_id']
+
+        # Update tracker konsekutif untuk user ini
+        _consecutive_trackers[uid] = _consecutive_trackers.get(uid, 0) + 1
+        count    = _consecutive_trackers[uid]
+        required = 3
+
+        if count < required:
+            hasil_list.append({
+                'status': 'skip', 'tipe': 'verifying',
+                'pesan': f'Memverifikasi wajah... ({count}/{required})'
+            })
+            continue
+
+        # ── Wajah terverifikasi — proses absensi ──
+        user = db.get_user_by_id(uid)
+        if not user:
+            hasil_list.append({
+                'status': 'error', 'tipe': 'user_not_found',
+                'pesan': f'User ID {uid} tidak ditemukan di database.'
+            })
+            continue
+
+        # Cari jadwal cocok dengan kelas mahasiswa
+        jadwal = next((j for j in jadwal_list if j['kelas_id'] == user['kelas_id']), None)
+        if not jadwal:
+            print(f'[MULTI] Tidak ada jadwal untuk kelas_id={user["kelas_id"]} '
+                  f'({user["nama"]}). Jadwal tersedia: {[j["kelas_id"] for j in jadwal_list]}')
+            hasil_list.append({
+                'status': 'error', 'tipe': 'no_jadwal',
+                'pesan': f'Tidak ada jadwal aktif untuk kelas {user.get("nama_kelas", "")}.',
+                'data': {'nama': user['nama'], 'nim': user['nim']}
+            })
+            continue
+
+        # Cek duplikat
+        sudah = db.cek_sudah_absen(uid, jadwal['id'], tanggal_hari_ini)
+        if sudah:
+            _consecutive_trackers[uid] = 0
+            hasil_list.append({
+                'status': 'error', 'tipe': 'duplikat',
+                'pesan': f'{user["nama"]} sudah absen untuk {jadwal["nama_mk"]} hari ini.',
+                'data': {'nama': user['nama'], 'nim': user['nim'],
+                         'status_absensi': sudah['status']}
+            })
+            continue
+
+        # Tentukan status hadir / terlambat
+        batas_str = str(jadwal['batas_terlambat'])
+        if isinstance(jadwal['batas_terlambat'], timedelta):
+            total_sec = int(jadwal['batas_terlambat'].total_seconds())
+            h, m, s   = total_sec // 3600, (total_sec % 3600) // 60, total_sec % 60
+            batas_str = f'{h:02d}:{m:02d}:{s:02d}'
+        status_absensi = 'hadir' if waktu_sekarang <= batas_str else 'terlambat'
+
+        # Simpan snapshot
+        snapshot_path = _simpan_snapshot(frame, uid)
+
+        # Catat absensi ke database
+        absensi_id = db.catat_absensi(
+            user_id=uid,
+            jadwal_id=jadwal['id'],
+            tanggal=tanggal_hari_ini,
+            waktu_absen=waktu_sekarang,
+            status=status_absensi,
+            snapshot_path=snapshot_path,
+            dibuat_manual=False
+        )
+
+        if not absensi_id:
+            hasil_list.append({
+                'status': 'error', 'tipe': 'db_error',
+                'pesan': f'Gagal menyimpan absensi {user["nama"]} ke database.'
+            })
+            continue
+
+        # Reset tracker hanya setelah absensi berhasil tersimpan
+        _consecutive_trackers[uid] = 0
+        print(f'[ABSENSI-MULTI] Berhasil: user_id={uid}, nama={user["nama"]}, '
+              f'jadwal={jadwal["nama_mk"]}, status={status_absensi}')
+
+        hasil_list.append({
+            'status': 'ok',
+            'pesan': f'Absensi {user["nama"]} berhasil ({status_absensi}).',
             'data': {
-                'nama': user['nama'], 'nim': user['nim'],
-                'status_absensi': sudah['status']
-            },
-            'spoofing': spoof_result
-        }
+                'nama':           user['nama'],
+                'nim':            user['nim'],
+                'nama_kelas':     user.get('nama_kelas', ''),
+                'nama_mk':        jadwal['nama_mk'],
+                'confidence':     pred['confidence'],
+                'status_absensi': status_absensi,
+                'waktu_absen':    waktu_sekarang,
+                'absensi_id':     absensi_id,
+                'status':         status_absensi
+            }
+        })
 
-    # ── 6. Tentukan status: hadir atau terlambat ──
-    batas_str = str(jadwal['batas_terlambat'])
-    # Konversi timedelta ke string waktu jika perlu
-    if isinstance(jadwal['batas_terlambat'], timedelta):
-        total_sec = int(jadwal['batas_terlambat'].total_seconds())
-        h, m, s = total_sec // 3600, (total_sec % 3600) // 60, total_sec % 60
-        batas_str = f'{h:02d}:{m:02d}:{s:02d}'
-
-    status_absensi = 'hadir' if waktu_sekarang <= batas_str else 'terlambat'
-
-    # ── 7. Simpan snapshot bukti absensi ──
-    snapshot_path = _simpan_snapshot(frame, user_id)
-
-    # ── 8. Catat absensi ke database ──
-    absensi_id = db.catat_absensi(
-        user_id=user_id,
-        jadwal_id=jadwal['id'],
-        tanggal=tanggal_hari_ini,
-        waktu_absen=waktu_sekarang,
-        status=status_absensi,
-        snapshot_path=snapshot_path,
-        dibuat_manual=False
-    )
-
-    if not absensi_id:
-        return {
-            'status': 'error',
-            'tipe': 'db_error',
-            'pesan': 'Gagal menyimpan absensi ke database.',
-            'spoofing': spoof_result
-        }
-
-    # ── Reset tracker HANYA setelah absensi berhasil tercatat ──
-    _consecutive_tracker['user_id'] = None
-    _consecutive_tracker['count'] = 0
-    print(f'[ABSENSI] Berhasil dicatat: user_id={user_id}, nama={user["nama"]}, '
-          f'jadwal={jadwal["nama_mk"]}, status={status_absensi}')
-
-    # ── 9. Kirim ke ESP32 ──
-    esp_status = 'berhasil'
-    _kirim_ke_esp32(user['nama'], user['nim'], esp_status)
-
-    # ── 10. Siapkan response ──
-    data_response = {
-        'nama': user['nama'],
-        'nim': user['nim'],
-        'nama_kelas': user.get('nama_kelas', ''),
-        'nama_mk': jadwal['nama_mk'],
-        'confidence': confidence,
-        'status_absensi': status_absensi,
-        'waktu_absen': waktu_sekarang,
-        'absensi_id': absensi_id,
-        'status': status_absensi
-    }
-
-    # Ambil statistik terbaru untuk update dashboard
-    stats = db.get_statistik_dashboard()
-
-    return {
-        'status': 'ok',
-        'pesan': f'Absensi {user["nama"]} berhasil ({status_absensi}).',
-        'data': data_response,
-        'stats': {
-            'hadir': stats.get('hadir_hari_ini', 0),
-            'terlambat': stats.get('terlambat_hari_ini', 0),
-            'alpha': stats.get('alpha_hari_ini', 0)
-        },
-        'spoofing': spoof_result
-    }
+    return hasil_list
 
 
 @app.route('/api/absensi/proses', methods=['POST'])
@@ -1331,7 +1262,7 @@ def handle_camera_toggle(data):
 
 @socketio.on('process_frame')
 def handle_process_frame(data):
-    """Terima frame dari client via WebSocket, proses recognition."""
+    """Terima frame dari client via WebSocket, proses recognition MULTI-FACE."""
     try:
         if 'frame' not in data:
             emit('recognition_result', {'status': 'error', 'pesan': 'Frame kosong.'})
@@ -1342,21 +1273,31 @@ def handle_process_frame(data):
             emit('recognition_result', {'status': 'error', 'pesan': 'Gagal decode.'})
             return
 
-        print(f'[SOCKET] process_frame: frame shape={frame.shape}')
-        hasil = _proses_recognition(frame)
-        print(f'[SOCKET] process_frame result: status={hasil.get("status")}, tipe={hasil.get("tipe", "-")}')
-        emit('recognition_result', hasil)
+        # Panggil versi multi-face (return list of dict)
+        hasil_list = _proses_recognition_multi(frame)
 
-        # Jika absensi berhasil, broadcast ke semua client
-        if hasil.get('status') == 'ok' and hasil.get('data'):
-            socketio.emit('absensi_update', {
-                **hasil['data'],
-                'stats': hasil.get('stats')
-            })
+        # Emit setiap hasil ke client pengirim frame
+        for hasil in hasil_list:
+            emit('recognition_result', hasil)
+
+        # Broadcast ke semua client hanya untuk absensi yang berhasil
+        stats_cache = None
+        for hasil in hasil_list:
+            if hasil.get('status') == 'ok' and hasil.get('data'):
+                if stats_cache is None:
+                    stats_cache = db.get_statistik_dashboard()
+                socketio.emit('absensi_update', {
+                    **hasil['data'],
+                    'stats': {
+                        'hadir':     stats_cache.get('hadir_hari_ini', 0),
+                        'terlambat': stats_cache.get('terlambat_hari_ini', 0),
+                        'alpha':     stats_cache.get('alpha_hari_ini', 0)
+                    }
+                })
+
     except Exception as e:
         print(f'[SOCKET ERROR] process_frame exception: {e}')
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         emit('recognition_result', {'status': 'error', 'pesan': f'Server error: {str(e)}'})
 
 
