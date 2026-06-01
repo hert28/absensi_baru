@@ -43,19 +43,28 @@ def train_model():
             img = cv2.resize(img, (200, 200))
 
             # Deteksi wajah dengan Haar Cascade
+            # scaleFactor lebih kecil dan minNeighbors lebih rendah agar lebih sensitif
             cascade = cv2.CascadeClassifier(
                 cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
             )
-            detected = cascade.detectMultiScale(img, 1.1, 3, minSize=(30, 30))
+            detected = cascade.detectMultiScale(
+                img, scaleFactor=1.05, minNeighbors=2, minSize=(20, 20)
+            )
 
             if len(detected) > 0:
-                # Ambil wajah pertama yang terdeteksi
-                (x, y, w, h) = detected[0]
+                # Ambil wajah terbesar yang terdeteksi
+                areas = [(w * h, i) for i, (x, y, w, h) in enumerate(detected)]
+                _, best_idx = max(areas)
+                (x, y, w, h) = detected[best_idx]
                 face_roi = img[y:y+h, x:x+w]
                 face_roi = cv2.resize(face_roi, (200, 200))
-                faces.append(face_roi)
-                labels.append(user_id)
-            # Foto tanpa wajah terdeteksi di-skip (jangan pakai full frame)
+            else:
+                # Fallback: foto sudah di-crop ke area wajah saat pengambilan,
+                # gunakan seluruh gambar — jangan skip foto ini.
+                face_roi = img  # sudah 200x200 dari resize di atas
+
+            faces.append(face_roi)
+            labels.append(user_id)
 
     if len(faces) == 0:
         print('[TRAINER] Tidak ada data wajah untuk training.')

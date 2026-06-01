@@ -84,8 +84,8 @@ const CameraManager = {
             // Minta akses kamera
             this.stream = await navigator.mediaDevices.getUserMedia({
                 video: {
-                    width: { ideal: 640 },
-                    height: { ideal: 480 },
+                    width:  { ideal: 640, max: 1280 },
+                    height: { ideal: 480, max: 720 },
                     facingMode: 'user'
                 },
                 audio: false
@@ -96,9 +96,10 @@ const CameraManager = {
             this.video.classList.add('active');
             await this.video.play();
 
-            // Set canvas ukuran sesuai video
-            this.canvas.width = 640;
-            this.canvas.height = 480;
+            // Canvas untuk capture (kecil = lebih cepat dikirim & diproses server)
+            // Video tetap ditampilkan di resolusi aslinya ke user
+            this.canvas.width  = 320;
+            this.canvas.height = 240;
 
             this.isActive = true;
 
@@ -202,9 +203,8 @@ const CameraManager = {
         // Gambar video ke canvas
         this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
 
-        // Konversi ke base64 JPEG (kompresi 85% — dinaikkan dari 70% agar
-        // kualitas frame lebih mendekati foto training sehingga confidence LBPH lebih akurat)
-        const frameData = this.canvas.toDataURL('image/jpeg', 0.85);
+        // Kompresi JPEG 65% — cukup untuk LBPH, payload lebih kecil = lebih cepat
+        const frameData = this.canvas.toDataURL('image/jpeg', 0.65);
 
         // Aktifkan pengunci sebelum kirim — dilepas di _handleRecognitionResult
         this.isProcessing = true;
@@ -228,6 +228,7 @@ const CameraManager = {
 
     /**
      * Fallback: kirim frame via HTTP jika WebSocket tidak tersedia
+     * Menangani response array (multi-face) dari /api/absensi/proses
      */
     _sendFrameHTTP: async function (frameData) {
         try {
@@ -237,14 +238,20 @@ const CameraManager = {
                 body: JSON.stringify({ frame: frameData })
             });
             const result = await response.json();
-            this._handleRecognitionResult(result);
+            // /api/absensi/proses sekarang mengembalikan array (multi-face)
+            if (Array.isArray(result)) {
+                result.forEach(item => this._handleRecognitionResult(item));
+            } else {
+                this._handleRecognitionResult(result);
+            }
         } catch (err) {
             console.warn('[CAMERA] Gagal kirim frame via HTTP:', err);
+            this.isProcessing = false;
         }
     },
 
     /**
-     * Handle hasil recognition dari server
+     * Handle hasil recognition dari server (satu dict per SocketIO event)
      */
     _handleRecognitionResult: function (data) {
         // Lepas kunci — server sudah menjawab, frame berikutnya boleh dikirim
@@ -252,12 +259,16 @@ const CameraManager = {
         this.lastResult = data;
         var indicatorSpan = document.querySelector('#processing-indicator span:last-child');
 
+        // Update spoofing indicator DI AWAL — sebelum semua early return
+        // Ini memastikan badge anti-spoofing selalu update terlepas dari status apapun
+        if (data.spoofing) {
+            DashboardUI.updateSpoofingIndicator(data.spoofing);
+        }
+
         // Skip — berbagai tipe
         if (data.status === 'skip') {
             if (data.tipe === 'verifying') {
                 if (indicatorSpan) indicatorSpan.textContent = '🔍 ' + (data.pesan || 'Memverifikasi...');
-            } else if (data.tipe === 'no_face') {
-                if (indicatorSpan) indicatorSpan.textContent = 'Mencari wajah...';
             } else {
                 if (indicatorSpan) indicatorSpan.textContent = 'Mencari wajah...';
             }
@@ -265,7 +276,6 @@ const CameraManager = {
         }
 
         if (data.status === 'error') {
-            // Spoofing terdeteksi
             if (data.tipe === 'spoofing') {
                 if (indicatorSpan) indicatorSpan.textContent = '⚠️ Spoofing!';
                 DashboardUI.showSpoofingWarning(data);
@@ -286,18 +296,12 @@ const CameraManager = {
         }
 
         if (data.status === 'ok') {
-            if (indicatorSpan) indicatorSpan.textContent = '✓ ' + data.data.nama;
-            // Wajah berhasil dikenali dan absensi dicatat
+            var namaDisplay = (data.data && data.data.nama) ? data.data.nama : '?';
+            if (indicatorSpan) indicatorSpan.textContent = '✓ ' + namaDisplay;
             DashboardUI.showRecognitionSuccess(data.data);
             DashboardUI.showToast('success', 'Absensi Tercatat',
-                `${data.data.nama} — ${data.data.status_absensi}`);
-            // Refresh tabel absensi
+                `${namaDisplay} — ${data.data.status_absensi}`);
             DashboardUI.refreshAbsensiTable();
-        }
-
-        // Update spoofing indicator
-        if (data.spoofing) {
-            DashboardUI.updateSpoofingIndicator(data.spoofing);
         }
     },
 
