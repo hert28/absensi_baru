@@ -1203,8 +1203,9 @@ def api_absensi_proses():
     if frame is None:
         return jsonify({'status': 'error', 'pesan': 'Gagal decode frame.', 'data': None}), 400
 
-    hasil = _proses_recognition(frame)
-    return jsonify(hasil)
+    # Panggil versi multi-face (return list of dict)
+    hasil_list = _proses_recognition_multi(frame)
+    return jsonify(hasil_list)
 
 
 @app.route('/api/camera/toggle', methods=['POST'])
