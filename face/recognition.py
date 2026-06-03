@@ -42,8 +42,8 @@ def reload_model():
 def detect_faces(frame):
     """Deteksi semua wajah dalam frame.
     
-    Menggunakan parameter yang lebih toleran agar bisa menangkap
-    wajah dari berbagai resolusi kamera (640x480 s.d. 1920x1080).
+    Menggunakan parameter optimal agar bisa mendeteksi wajah dekat maupun jauh,
+    serta wajah berkerumun (multi-face).
     
     Args:
         frame: numpy array BGR dari OpenCV (atau grayscale)
@@ -56,14 +56,15 @@ def detect_faces(frame):
     else:
         gray = frame
 
-    # Histogram equalization agar deteksi lebih konsisten di berbagai kondisi cahaya
-    gray = cv2.equalizeHist(gray)
+    # Gunakan CLAHE agar deteksi wajah tahan terhadap pencahayaan tidak merata (misal: bayangan/terang sebelah)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray_clahe = clahe.apply(gray)
 
     faces = _face_cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=4,
-        minSize=(30, 30)
+        gray_clahe,
+        scaleFactor=1.08,    # Lebih rapat (default 1.1) agar wajah jauh/kecil terdeteksi
+        minNeighbors=3,      # Lebih sensitif (default 4) untuk mendeteksi kerumunan wajah
+        minSize=(20, 20)     # Batas minimal 20x20 piksel agar bisa mendeteksi dari jarak jauh
     )
     return faces
 
@@ -72,7 +73,7 @@ def predict(frame):
     """Kenali SEMUA wajah dalam frame menggunakan model LBPH (multi-face).
     
     Preprocessing yang sama dengan trainer:
-    - Crop wajah → resize 200x200 → histogram equalization
+    - Crop wajah → resize 200x200 → histogram equalization (CLAHE)
     Ini memastikan data saat predict konsisten dengan data saat training.
     
     Args:
@@ -96,13 +97,14 @@ def predict(frame):
     else:
         gray = frame.copy()
 
-    # Deteksi wajah (sudah termasuk equalization di dalam detect_faces)
+    # Deteksi wajah menggunakan CLAHE
     faces = detect_faces(gray)
     if len(faces) == 0:
         return []
 
-    # Equalize gray untuk crop — harus sama dengan yang dipakai detect_faces
-    gray_eq = cv2.equalizeHist(gray)
+    # Gunakan CLAHE untuk preprocessing crop wajah agar sama persis dengan dataset training
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray_eq = clahe.apply(gray)
 
     hasil = []
     for (x, y, w, h) in faces:

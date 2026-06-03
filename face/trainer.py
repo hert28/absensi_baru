@@ -51,9 +51,10 @@ def train_model():
             # Resize ke ukuran standar 200x200 untuk konsistensi
             img = cv2.resize(img, (200, 200))
 
-            # Histogram equalization — normalisasi pencahayaan
+            # CLAHE (Adaptive Histogram Equalization) — normalisasi pencahayaan lokal
             # Penting agar model tahan terhadap variasi kamera dan cahaya
-            img = cv2.equalizeHist(img)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            img = clahe.apply(img)
 
             faces.append(img)
             labels.append(user_id)

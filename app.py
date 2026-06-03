@@ -890,22 +890,23 @@ def api_foto_upload():
 
         faces = []
 
-        # Strategi 1: Dengan histogram equalization (normalisasi cahaya)
-        gray_eq = cv2.equalizeHist(gray)
+        # Strategi 1: Dengan CLAHE (Adaptive Histogram Equalization)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray_clahe = clahe.apply(gray)
         faces = cascade.detectMultiScale(
-            gray_eq, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30)
+            gray_clahe, scaleFactor=1.08, minNeighbors=3, minSize=(30, 30)
         )
 
         # Strategi 2: Tanpa equalization (kamera yang sudah bagus)
         if len(faces) == 0:
             faces = cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30)
+                gray, scaleFactor=1.08, minNeighbors=3, minSize=(30, 30)
             )
 
-        # Strategi 3: Parameter lebih toleran (fallback terakhir)
+        # Strategi 3: Parameter lebih toleran (fallback terakhir untuk wajah jauh/kecil)
         if len(faces) == 0:
             faces = cascade.detectMultiScale(
-                gray_eq, scaleFactor=1.05, minNeighbors=3, minSize=(20, 20)
+                gray_clahe, scaleFactor=1.05, minNeighbors=2, minSize=(20, 20)
             )
 
         if len(faces) > 0:
