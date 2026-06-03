@@ -33,8 +33,8 @@ from config import (FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY,
                     ESP32_ENABLED, ESP32_IP, ESP32_PORT, ESP32_TIMEOUT,
                     MODEL_PATH)
 
-# Override threshold ke 65.0 (Sangat ketat untuk mencegah wajah salah dikenali)
-CONFIDENCE_THRESHOLD = 65.0
+# Override threshold ke 70.0 (Keseimbangan optimal antara toleransi kacamata dan akurasi tinggi)
+CONFIDENCE_THRESHOLD = 70.0
 
 # ── Inisialisasi Flask + SocketIO ─────────────────────────────
 app = Flask(__name__)
@@ -915,15 +915,11 @@ def api_foto_upload():
             best_idx = int(np.argmax(areas))
             (fx, fy, fw, fh) = faces[best_idx]
 
-            # Tambahkan margin 30% di sekeliling wajah untuk variasi pose
-            margin = 0.3
+            # Gunakan margin 0% agar crop wajah saat registrasi sama persis dengan saat pengenalan/prediksi
+            # Hal ini krusial agar histogram LBPH saat training dan predict konsisten
             img_h, img_w = frame.shape[:2]
-            mx = int(fw * margin)
-            my = int(fh * margin)
-            x1 = max(0, fx - mx)
-            y1 = max(0, fy - my)
-            x2 = min(img_w, fx + fw + mx)
-            y2 = min(img_h, fy + fh + my)
+            x1, y1 = max(0, fx), max(0, fy)
+            x2, y2 = min(img_w, fx + fw), min(img_h, fy + fh)
             save_frame = frame[y1:y2, x1:x2]
         else:
             # Tidak ada wajah terdeteksi — jangan simpan, client akan retry
@@ -1124,7 +1120,7 @@ def _proses_recognition_multi(frame):
         # Update tracker konsekutif untuk user ini
         _consecutive_trackers[uid] = _consecutive_trackers.get(uid, 0) + 1
         count    = _consecutive_trackers[uid]
-        required = 2
+        required = 1
 
         if count < required:
             hasil_list.append({
@@ -1227,7 +1223,12 @@ def api_absensi_proses():
     Menerima base64 frame, jalankan anti-spoofing → recognition → catat absensi.
     Response format batch: {results: [...]} agar client bisa tampilkan semua sekaligus.
     """
-    data = request.get_json()
+    try:
+        data = request.get_json()
+    except Exception as e:
+        print(f"[ABSENSI] Gagal membaca data request (client terputus): {e}")
+        return jsonify({'results': [{'status': 'error', 'pesan': 'Koneksi terputus saat membaca request.'}]}), 400
+
     if not data or 'frame' not in data:
         return jsonify({'results': [{'status': 'error', 'pesan': 'Frame tidak ditemukan.'}]}), 400
 
