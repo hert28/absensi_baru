@@ -6,8 +6,8 @@ import os
 import numpy as np
 from config import MODEL_PATH, CONFIDENCE_THRESHOLD
 
-# Override threshold ke 80.0 (Keseimbangan antara toleransi kacamata dan pencegahan wajah salah dikenali)
-CONFIDENCE_THRESHOLD = 80.0
+# Override threshold ke 65.0 (Sangat ketat untuk mencegah wajah salah dikenali)
+CONFIDENCE_THRESHOLD = 65.0
 
 
 # Haar Cascade untuk deteksi wajah

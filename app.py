@@ -33,8 +33,8 @@ from config import (FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY,
                     ESP32_ENABLED, ESP32_IP, ESP32_PORT, ESP32_TIMEOUT,
                     MODEL_PATH)
 
-# Override threshold ke 80.0 (Keseimbangan optimal antara toleransi dan akurasi)
-CONFIDENCE_THRESHOLD = 80.0
+# Override threshold ke 65.0 (Sangat ketat untuk mencegah wajah salah dikenali)
+CONFIDENCE_THRESHOLD = 65.0
 
 # ── Inisialisasi Flask + SocketIO ─────────────────────────────
 app = Flask(__name__)
