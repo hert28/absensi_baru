@@ -33,8 +33,8 @@ from config import (FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY,
                     ESP32_ENABLED, ESP32_IP, ESP32_PORT, ESP32_TIMEOUT,
                     MODEL_PATH)
 
-# Override threshold ke 85.0 agar lebih toleran dan responsif
-CONFIDENCE_THRESHOLD = 85.0
+# Override threshold ke 80.0 (Keseimbangan optimal antara toleransi dan akurasi)
+CONFIDENCE_THRESHOLD = 80.0
 
 # ── Inisialisasi Flask + SocketIO ─────────────────────────────
 app = Flask(__name__)
@@ -894,19 +894,19 @@ def api_foto_upload():
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         gray_clahe = clahe.apply(gray)
         faces = cascade.detectMultiScale(
-            gray_clahe, scaleFactor=1.08, minNeighbors=3, minSize=(30, 30)
+            gray_clahe, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
         )
 
         # Strategi 2: Tanpa equalization (kamera yang sudah bagus)
         if len(faces) == 0:
             faces = cascade.detectMultiScale(
-                gray, scaleFactor=1.08, minNeighbors=3, minSize=(30, 30)
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
             )
 
         # Strategi 3: Parameter lebih toleran (fallback terakhir untuk wajah jauh/kecil)
         if len(faces) == 0:
             faces = cascade.detectMultiScale(
-                gray_clahe, scaleFactor=1.05, minNeighbors=2, minSize=(20, 20)
+                gray_clahe, scaleFactor=1.05, minNeighbors=4, minSize=(30, 30)
             )
 
         if len(faces) > 0:

@@ -6,8 +6,8 @@ import os
 import numpy as np
 from config import MODEL_PATH, CONFIDENCE_THRESHOLD
 
-# Override threshold ke 85.0 untuk toleransi yang lebih baik (kacamata & pencahayaan)
-CONFIDENCE_THRESHOLD = 85.0
+# Override threshold ke 80.0 (Keseimbangan antara toleransi kacamata dan pencegahan wajah salah dikenali)
+CONFIDENCE_THRESHOLD = 80.0
 
 
 # Haar Cascade untuk deteksi wajah
@@ -62,9 +62,9 @@ def detect_faces(frame):
 
     faces = _face_cascade.detectMultiScale(
         gray_clahe,
-        scaleFactor=1.08,    # Lebih rapat (default 1.1) agar wajah jauh/kecil terdeteksi
-        minNeighbors=3,      # Lebih sensitif (default 4) untuk mendeteksi kerumunan wajah
-        minSize=(20, 20)     # Batas minimal 20x20 piksel agar bisa mendeteksi dari jarak jauh
+        scaleFactor=1.1,     # Kembali ke 1.1 agar stabil
+        minNeighbors=5,      # Ditingkatkan ke 5 untuk menghindari false detection pada background/benda mati
+        minSize=(40, 40)     # Ukuran minimal 40x40 agar tidak mendeteksi noise
     )
     return faces
 
