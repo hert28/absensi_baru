@@ -1194,18 +1194,20 @@ def api_absensi_proses():
     """Proses frame dari kamera untuk face recognition + absensi.
 
     Menerima base64 frame, jalankan anti-spoofing → recognition → catat absensi.
+    Response format batch: {results: [...]} agar client bisa tampilkan semua sekaligus.
     """
     data = request.get_json()
     if not data or 'frame' not in data:
-        return jsonify({'status': 'error', 'pesan': 'Frame tidak ditemukan.', 'data': None}), 400
+        return jsonify({'results': [{'status': 'error', 'pesan': 'Frame tidak ditemukan.'}]}), 400
 
     frame = _decode_frame(data['frame'])
     if frame is None:
-        return jsonify({'status': 'error', 'pesan': 'Gagal decode frame.', 'data': None}), 400
+        return jsonify({'results': [{'status': 'error', 'pesan': 'Gagal decode frame.'}]}), 400
 
     # Panggil versi multi-face (return list of dict)
     hasil_list = _proses_recognition_multi(frame)
-    return jsonify(hasil_list)
+    # Kirim sebagai batch agar client proses semua wajah sekaligus
+    return jsonify({'results': hasil_list})
 
 
 @app.route('/api/camera/toggle', methods=['POST'])
@@ -1263,30 +1265,34 @@ def handle_camera_toggle(data):
 
 @socketio.on('process_frame')
 def handle_process_frame(data):
-    """Terima frame dari client via WebSocket, proses recognition MULTI-FACE."""
+    """Terima frame dari client via WebSocket, proses recognition MULTI-FACE.
+
+    Mengirim SATU event 'recognition_result' berisi {results: [...]}
+    agar client bisa menampilkan semua wajah yang terdeteksi sekaligus.
+    """
     try:
         if 'frame' not in data:
-            emit('recognition_result', {'status': 'error', 'pesan': 'Frame kosong.'})
+            emit('recognition_result', {'results': [{'status': 'error', 'pesan': 'Frame kosong.'}]})
             return
 
         frame = _decode_frame(data['frame'])
         if frame is None:
-            emit('recognition_result', {'status': 'error', 'pesan': 'Gagal decode.'})
+            emit('recognition_result', {'results': [{'status': 'error', 'pesan': 'Gagal decode.'}]})
             return
 
         # Panggil versi multi-face (return list of dict)
         hasil_list = _proses_recognition_multi(frame)
 
-        # Emit setiap hasil ke client pengirim frame
-        for hasil in hasil_list:
-            emit('recognition_result', hasil)
+        # Emit SEMUA hasil sekaligus sebagai satu batch event
+        # Client menerima 1 event berisi array → bisa tampilkan semua wajah bersamaan
+        emit('recognition_result', {'results': hasil_list})
 
         # Broadcast ke semua client hanya untuk absensi yang berhasil
-        stats_cache = None
-        for hasil in hasil_list:
-            if hasil.get('status') == 'ok' and hasil.get('data'):
-                if stats_cache is None:
-                    stats_cache = db.get_statistik_dashboard()
+        berhasil_list = [h for h in hasil_list
+                         if h.get('status') == 'ok' and h.get('data')]
+        if berhasil_list:
+            stats_cache = db.get_statistik_dashboard()
+            for hasil in berhasil_list:
                 socketio.emit('absensi_update', {
                     **hasil['data'],
                     'stats': {
@@ -1299,7 +1305,7 @@ def handle_process_frame(data):
     except Exception as e:
         print(f'[SOCKET ERROR] process_frame exception: {e}')
         import traceback; traceback.print_exc()
-        emit('recognition_result', {'status': 'error', 'pesan': f'Server error: {str(e)}'})
+        emit('recognition_result', {'results': [{'status': 'error', 'pesan': f'Server error: {str(e)}'}]})
 
 
 

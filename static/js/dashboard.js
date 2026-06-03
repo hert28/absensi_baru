@@ -103,35 +103,50 @@ const DashboardUI = {
     },
 
     /**
-     * Tampilkan hasil recognition berhasil di overlay
+     * Tampilkan hasil recognition berhasil di overlay — mendukung multi-face.
+     * Menerima array data sehingga semua wajah yang berhasil ditampilkan sekaligus.
+     * @param {Array|Object} dataOrList — satu data object atau array data objects
      */
-    showRecognitionSuccess: function (data) {
+    showRecognitionSuccess: function (dataOrList) {
         const overlay = document.getElementById('recognition-overlay');
         if (!overlay) return;
 
-        const statusClass = data.status_absensi === 'hadir' ? 'hadir' : 'terlambat';
-        const statusLabel = data.status_absensi === 'hadir' ? 'HADIR' : 'TERLAMBAT';
-        const statusIcon = data.status_absensi === 'hadir' ? 'check_circle' : 'schedule';
+        // Normalisasi ke array agar kompatibel dengan pemanggilan lama (single) & baru (batch)
+        const list = Array.isArray(dataOrList) ? dataOrList : [dataOrList];
 
-        overlay.innerHTML = `
-            <div class="flex items-center justify-between">
-                <div class="flex items-center gap-3">
-                    <span class="material-symbols-outlined text-3xl text-emerald-400">face</span>
-                    <div>
-                        <p class="recognition-name">${data.nama}</p>
-                        <p class="recognition-detail">${data.nim} — ${data.nama_kelas || ''} — ${data.nama_mk || ''}</p>
+        // Bersihkan overlay lama, lalu bangun ulang dengan semua wajah
+        overlay.innerHTML = '';
+
+        list.forEach(function(data) {
+            const statusClass = data.status_absensi === 'hadir' ? 'hadir' : 'terlambat';
+            const statusLabel = data.status_absensi === 'hadir' ? 'HADIR' : 'TERLAMBAT';
+            const statusIcon = data.status_absensi === 'hadir' ? 'check_circle' : 'schedule';
+
+            const entry = document.createElement('div');
+            entry.className = 'recognition-entry';
+            entry.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <span class="material-symbols-outlined text-2xl text-emerald-400">face</span>
+                        <div>
+                            <p class="recognition-name">${data.nama}</p>
+                            <p class="recognition-detail">${data.nim} — ${data.nama_kelas || ''} — ${data.nama_mk || ''}</p>
+                        </div>
                     </div>
+                    <span class="status-badge ${statusClass}">
+                        <span class="material-symbols-outlined" style="font-size:14px">${statusIcon}</span>
+                        ${statusLabel}
+                    </span>
                 </div>
-                <span class="status-badge ${statusClass}">
-                    <span class="material-symbols-outlined" style="font-size:14px">${statusIcon}</span>
-                    ${statusLabel}
-                </span>
-            </div>
-        `;
+            `;
+            overlay.appendChild(entry);
+        });
+
         overlay.classList.add('active');
 
-        // Sembunyikan setelah 5 detik
-        setTimeout(() => overlay.classList.remove('active'), 5000);
+        // Sembunyikan setelah 5 detik (reset timer jika dipanggil ulang)
+        if (this._overlayTimer) clearTimeout(this._overlayTimer);
+        this._overlayTimer = setTimeout(function() { overlay.classList.remove('active'); }, 5000);
     },
 
     /**

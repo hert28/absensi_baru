@@ -228,7 +228,7 @@ const CameraManager = {
 
     /**
      * Fallback: kirim frame via HTTP jika WebSocket tidak tersedia
-     * Menangani response array (multi-face) dari /api/absensi/proses
+     * Menangani response batch {results: [...]} dari /api/absensi/proses
      */
     _sendFrameHTTP: async function (frameData) {
         try {
@@ -238,12 +238,8 @@ const CameraManager = {
                 body: JSON.stringify({ frame: frameData })
             });
             const result = await response.json();
-            // /api/absensi/proses sekarang mengembalikan array (multi-face)
-            if (Array.isArray(result)) {
-                result.forEach(item => this._handleRecognitionResult(item));
-            } else {
-                this._handleRecognitionResult(result);
-            }
+            // Format batch: {results: [...]}
+            this._handleRecognitionResult(result);
         } catch (err) {
             console.warn('[CAMERA] Gagal kirim frame via HTTP:', err);
             this.isProcessing = false;
@@ -251,57 +247,132 @@ const CameraManager = {
     },
 
     /**
-     * Handle hasil recognition dari server (satu dict per SocketIO event)
+     * Handle hasil recognition BATCH dari server.
+     * Menerima {results: [...]} — satu event berisi SEMUA wajah yang diproses.
+     * Mengkategorikan semua hasil lalu menampilkan overlay & toast gabungan sekaligus.
      */
     _handleRecognitionResult: function (data) {
         // Lepas kunci — server sudah menjawab, frame berikutnya boleh dikirim
         this.isProcessing = false;
-        this.lastResult = data;
+
+        // Ambil array hasil (format batch: {results: [...]})
+        var results = data.results || [data];
+        this.lastResult = results;
+
         var indicatorSpan = document.querySelector('#processing-indicator span:last-child');
 
-        // Update spoofing indicator DI AWAL — sebelum semua early return
-        // Ini memastikan badge anti-spoofing selalu update terlepas dari status apapun
-        if (data.spoofing) {
-            DashboardUI.updateSpoofingIndicator(data.spoofing);
+        // Update spoofing indicator dari hasil yang punya info spoofing
+        for (var i = 0; i < results.length; i++) {
+            if (results[i].spoofing) {
+                DashboardUI.updateSpoofingIndicator(results[i].spoofing);
+                break;
+            }
         }
 
-        // Skip — berbagai tipe
-        if (data.status === 'skip') {
-            if (data.tipe === 'verifying') {
-                if (indicatorSpan) indicatorSpan.textContent = '🔍 ' + (data.pesan || 'Memverifikasi...');
-            } else {
-                if (indicatorSpan) indicatorSpan.textContent = 'Mencari wajah...';
+        // ── Kategorikan semua hasil sekaligus ──
+        var sukses = [];
+        var verifying = [];
+        var duplikat = [];
+        var noJadwal = [];
+        var unknown = [];
+        var spoofing = null;
+        var noFace = false;
+
+        for (var i = 0; i < results.length; i++) {
+            var item = results[i];
+            if (item.status === 'ok') {
+                sukses.push(item);
+            } else if (item.status === 'skip') {
+                if (item.tipe === 'verifying') verifying.push(item);
+                else if (item.tipe === 'no_face') noFace = true;
+            } else if (item.status === 'error') {
+                if (item.tipe === 'spoofing') spoofing = item;
+                else if (item.tipe === 'duplikat') duplikat.push(item);
+                else if (item.tipe === 'unknown') unknown.push(item);
+                else if (item.tipe === 'no_jadwal') noJadwal.push(item);
             }
+        }
+
+        // ── Spoofing — prioritas tertinggi, langsung return ──
+        if (spoofing) {
+            if (indicatorSpan) indicatorSpan.textContent = '⚠️ Spoofing!';
+            DashboardUI.showSpoofingWarning(spoofing);
             return;
         }
 
-        if (data.status === 'error') {
-            if (data.tipe === 'spoofing') {
-                if (indicatorSpan) indicatorSpan.textContent = '⚠️ Spoofing!';
-                DashboardUI.showSpoofingWarning(data);
-            } else if (data.tipe === 'duplikat') {
-                if (indicatorSpan) indicatorSpan.textContent = '✓ Sudah absen';
-                this._throttledToast('info', 'Sudah Absen', data.pesan || 'Mahasiswa sudah absen hari ini.');
-            } else if (data.tipe === 'unknown') {
-                if (indicatorSpan) indicatorSpan.textContent = '? Wajah tidak dikenali';
-                this._throttledToast('warning', 'Tidak Dikenali', data.pesan || 'Wajah tidak cocok dengan database.');
-            } else if (data.tipe === 'no_jadwal') {
-                if (indicatorSpan) indicatorSpan.textContent = '⏰ Tidak ada jadwal';
-                this._throttledToast('warning', 'Tidak Ada Jadwal', data.pesan || 'Tidak ada jadwal aktif saat ini.');
-            } else {
-                if (indicatorSpan) indicatorSpan.textContent = 'Memproses...';
-                console.warn('[CAMERA] Recognition error:', data.pesan);
-            }
-            return;
-        }
+        // ── Absensi berhasil — tampilkan SEMUA wajah sekaligus ──
+        if (sukses.length > 0) {
+            var dataList = sukses.map(function(s) { return s.data; });
+            var names = dataList.map(function(d) { return d ? d.nama : '?'; });
+            if (indicatorSpan) indicatorSpan.textContent = '✓ ' + names.join(', ');
 
-        if (data.status === 'ok') {
-            var namaDisplay = (data.data && data.data.nama) ? data.data.nama : '?';
-            if (indicatorSpan) indicatorSpan.textContent = '✓ ' + namaDisplay;
-            DashboardUI.showRecognitionSuccess(data.data);
-            DashboardUI.showToast('success', 'Absensi Tercatat',
-                `${namaDisplay} — ${data.data.status_absensi}`);
+            // Tampilkan overlay multi-face sekaligus
+            DashboardUI.showRecognitionSuccess(dataList);
+
+            // Toast gabungan: 1 notifikasi untuk semua wajah yang berhasil
+            var namaLines = dataList.map(function(d) {
+                var statusLabel = d.status_absensi === 'hadir' ? 'Hadir' : 'Terlambat';
+                return d.nama + ' — ' + statusLabel;
+            });
+            var toastTitle = sukses.length > 1
+                ? 'Absensi Tercatat (' + sukses.length + ' orang)'
+                : 'Absensi Tercatat';
+            DashboardUI.showToast('success', toastTitle, namaLines.join(' • '));
+
             DashboardUI.refreshAbsensiTable();
+        }
+
+        // ── Verifikasi wajah (belum cukup frame konsekutif) ──
+        if (verifying.length > 0 && sukses.length === 0) {
+            var verifMsg = verifying.length === 1
+                ? (verifying[0].pesan || 'Memverifikasi...')
+                : 'Memverifikasi ' + verifying.length + ' wajah...';
+            if (indicatorSpan) indicatorSpan.textContent = '🔍 ' + verifMsg;
+        }
+
+        // ── Duplikat — sudah absen sebelumnya ──
+        if (duplikat.length > 0) {
+            if (indicatorSpan && sukses.length === 0 && verifying.length === 0) {
+                indicatorSpan.textContent = '✓ Sudah absen';
+            }
+            var dupNames = duplikat.map(function(d) {
+                return d.data ? d.data.nama : '';
+            }).filter(Boolean);
+            if (dupNames.length > 0) {
+                var dupMsg = dupNames.length > 1
+                    ? dupNames.join(', ') + ' sudah absen hari ini.'
+                    : dupNames[0] + ' sudah absen hari ini.';
+                this._throttledToast('info', 'Sudah Absen', dupMsg);
+            }
+        }
+
+        // ── Wajah tidak dikenali ──
+        if (unknown.length > 0 && sukses.length === 0 && verifying.length === 0 && duplikat.length === 0) {
+            if (indicatorSpan) indicatorSpan.textContent = '? Wajah tidak dikenali';
+            var unknownMsg = unknown.length > 1
+                ? unknown.length + ' wajah tidak cocok dengan database.'
+                : 'Wajah tidak cocok dengan database.';
+            this._throttledToast('warning', 'Tidak Dikenali', unknownMsg);
+        }
+
+        // ── Tidak ada jadwal aktif ──
+        if (noJadwal.length > 0 && sukses.length === 0 && verifying.length === 0) {
+            if (indicatorSpan && duplikat.length === 0) {
+                indicatorSpan.textContent = '⏰ Tidak ada jadwal';
+            }
+            var njNames = noJadwal.map(function(d) {
+                return d.data ? d.data.nama : '';
+            }).filter(Boolean);
+            if (njNames.length > 0) {
+                this._throttledToast('warning', 'Tidak Ada Jadwal',
+                    'Tidak ada jadwal aktif untuk ' + njNames.join(', ') + '.');
+            }
+        }
+
+        // ── Tidak ada wajah sama sekali ──
+        if (noFace && sukses.length === 0 && verifying.length === 0 &&
+            duplikat.length === 0 && unknown.length === 0) {
+            if (indicatorSpan) indicatorSpan.textContent = 'Mencari wajah...';
         }
     },
 

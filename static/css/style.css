@@ -78,6 +78,33 @@
     opacity: 0.75;
 }
 
+/* Entry per wajah di recognition overlay (multi-face) */
+.recognition-entry {
+    padding: 8px 0;
+    animation: entryFadeIn 0.35s ease-out both;
+}
+
+.recognition-entry:first-child {
+    padding-top: 0;
+}
+
+.recognition-entry + .recognition-entry {
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    margin-top: 4px;
+    padding-top: 12px;
+}
+
+/* Animasi stagger: entry kedua muncul sedikit lebih lambat */
+.recognition-entry:nth-child(2) { animation-delay: 0.1s; }
+.recognition-entry:nth-child(3) { animation-delay: 0.2s; }
+.recognition-entry:nth-child(4) { animation-delay: 0.3s; }
+.recognition-entry:nth-child(5) { animation-delay: 0.4s; }
+
+@keyframes entryFadeIn {
+    from { transform: translateX(-12px); opacity: 0; }
+    to   { transform: translateX(0); opacity: 1; }
+}
+
 /* Status badge di overlay */
 .status-badge {
     display: inline-flex;
