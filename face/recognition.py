@@ -6,6 +6,9 @@ import os
 import numpy as np
 from config import MODEL_PATH, CONFIDENCE_THRESHOLD
 
+# Override threshold ke 85.0 untuk toleransi yang lebih baik (kacamata & pencahayaan)
+CONFIDENCE_THRESHOLD = 85.0
+
 
 # Haar Cascade untuk deteksi wajah
 _cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'

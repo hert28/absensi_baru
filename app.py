@@ -33,6 +33,9 @@ from config import (FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY,
                     ESP32_ENABLED, ESP32_IP, ESP32_PORT, ESP32_TIMEOUT,
                     MODEL_PATH)
 
+# Override threshold ke 85.0 agar lebih toleran dan responsif
+CONFIDENCE_THRESHOLD = 85.0
+
 # ── Inisialisasi Flask + SocketIO ─────────────────────────────
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
@@ -1120,7 +1123,7 @@ def _proses_recognition_multi(frame):
         # Update tracker konsekutif untuk user ini
         _consecutive_trackers[uid] = _consecutive_trackers.get(uid, 0) + 1
         count    = _consecutive_trackers[uid]
-        required = 3
+        required = 2
 
         if count < required:
             hasil_list.append({
