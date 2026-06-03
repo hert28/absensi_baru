@@ -82,7 +82,7 @@
             </div>
             <div class="flex items-center gap-2 bg-emerald-500/10 px-3 py-1 rounded-full">
                 <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-                <span id="connection-status" class="text-body-sm font-semibold text-emerald-500">Anti-Spoofing: Aktif</span>
+                <span id="connection-status" class="text-body-sm font-semibold text-emerald-500">Face Recognition</span>
             </div>
         </div>
         <!-- Container kamera dengan video feed -->
@@ -94,13 +94,7 @@
             <div id="camera-placeholder" class="text-center">
                 <span class="material-symbols-outlined text-6xl text-on-surface-variant/20 mb-4">videocam</span>
                 <p class="text-on-surface-variant font-body-sm">Klik tombol "Kamera ON" untuk memulai</p>
-                <p class="text-outline text-[11px] mt-1">Face recognition + anti-spoofing akan aktif otomatis</p>
-            </div>
-
-            <!-- Anti-spoofing indicator -->
-            <div id="spoofing-indicator" class="active" style="display:none">
-                <span class="dot"></span>
-                <span class="label">Anti-Spoofing: OK</span>
+                <p class="text-outline text-[11px] mt-1">Face recognition akan aktif otomatis</p>
             </div>
 
             <!-- Recognition overlay (tampil saat wajah dikenali) -->
@@ -288,10 +282,6 @@
             <div class="p-4 bg-primary/5 border-l-4 border-primary rounded-r-xl">
                 <h5 class="font-body-md font-bold text-primary">Face Recognition</h5>
                 <p class="text-body-sm text-on-surface-variant">LBPH Engine — Confidence threshold: {{ conf_threshold }}</p>
-            </div>
-            <div class="p-4 bg-emerald-500/5 border-l-4 border-emerald-500 rounded-r-xl">
-                <h5 class="font-body-md font-bold text-emerald-500">Anti-Spoofing</h5>
-                <p class="text-body-sm text-on-surface-variant">LBP Texture Analysis — Threshold: {{ spoof_threshold }}</p>
             </div>
             <div class="p-4 bg-surface-container-high/40 border-l-4 border-outline-variant rounded-r-xl">
                 <h5 class="font-body-md font-bold text-on-surface">Statistik</h5>

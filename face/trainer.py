@@ -13,6 +13,13 @@ def train_model():
     Struktur folder:
         dataset/{user_id}/0.jpg, 1.jpg, ... 49.jpg
     
+    Foto sudah di-crop ke area wajah + margin saat pengambilan (api_foto_upload).
+    Oleh karena itu, trainer TIDAK perlu re-deteksi wajah — langsung resize
+    dan gunakan seluruh gambar sebagai face ROI.
+    
+    Preprocessing: histogram equalization untuk normalisasi pencahayaan
+    agar model lebih tahan terhadap variasi kamera dan kondisi cahaya.
+    
     Output:
         models/trainer.yml
     """
@@ -30,41 +37,30 @@ def train_model():
         except ValueError:
             continue
 
+        foto_count = 0
         for filename in os.listdir(user_path):
-            if not filename.endswith('.jpg'):
+            if not filename.lower().endswith('.jpg'):
                 continue
 
             filepath = os.path.join(user_path, filename)
             img = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
             if img is None:
+                print(f'[TRAINER] Gagal baca file: {filepath}')
                 continue
 
-            # Resize ke ukuran standar untuk konsistensi
+            # Resize ke ukuran standar 200x200 untuk konsistensi
             img = cv2.resize(img, (200, 200))
 
-            # Deteksi wajah dengan Haar Cascade
-            # scaleFactor lebih kecil dan minNeighbors lebih rendah agar lebih sensitif
-            cascade = cv2.CascadeClassifier(
-                cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-            )
-            detected = cascade.detectMultiScale(
-                img, scaleFactor=1.05, minNeighbors=2, minSize=(20, 20)
-            )
+            # Histogram equalization — normalisasi pencahayaan
+            # Penting agar model tahan terhadap variasi kamera dan cahaya
+            img = cv2.equalizeHist(img)
 
-            if len(detected) > 0:
-                # Ambil wajah terbesar yang terdeteksi
-                areas = [(w * h, i) for i, (x, y, w, h) in enumerate(detected)]
-                _, best_idx = max(areas)
-                (x, y, w, h) = detected[best_idx]
-                face_roi = img[y:y+h, x:x+w]
-                face_roi = cv2.resize(face_roi, (200, 200))
-            else:
-                # Fallback: foto sudah di-crop ke area wajah saat pengambilan,
-                # gunakan seluruh gambar — jangan skip foto ini.
-                face_roi = img  # sudah 200x200 dari resize di atas
-
-            faces.append(face_roi)
+            faces.append(img)
             labels.append(user_id)
+            foto_count += 1
+
+        if foto_count > 0:
+            print(f'[TRAINER] User {user_id}: {foto_count} foto dimuat.')
 
     if len(faces) == 0:
         print('[TRAINER] Tidak ada data wajah untuk training.')

@@ -39,6 +39,9 @@ def reload_model():
 def detect_faces(frame):
     """Deteksi semua wajah dalam frame.
     
+    Menggunakan parameter yang lebih toleran agar bisa menangkap
+    wajah dari berbagai resolusi kamera (640x480 s.d. 1920x1080).
+    
     Args:
         frame: numpy array BGR dari OpenCV (atau grayscale)
     
@@ -50,6 +53,9 @@ def detect_faces(frame):
     else:
         gray = frame
 
+    # Histogram equalization agar deteksi lebih konsisten di berbagai kondisi cahaya
+    gray = cv2.equalizeHist(gray)
+
     faces = _face_cascade.detectMultiScale(
         gray,
         scaleFactor=1.1,
@@ -60,14 +66,18 @@ def detect_faces(frame):
 
 
 def predict(frame):
-    """Kenali wajah dalam frame menggunakan model LBPH.
+    """Kenali SEMUA wajah dalam frame menggunakan model LBPH (multi-face).
+    
+    Preprocessing yang sama dengan trainer:
+    - Crop wajah → resize 200x200 → histogram equalization
+    Ini memastikan data saat predict konsisten dengan data saat training.
     
     Args:
         frame: numpy array BGR dari OpenCV
     
     Returns:
         List of dict: [{'user_id': int, 'confidence': float, 'bbox': (x,y,w,h)}]
-        confidence rendah = lebih mirip. Threshold < 70 = dikenali.
+        confidence rendah = lebih mirip. Threshold < CONFIDENCE_THRESHOLD = dikenali.
         Return list kosong jika tidak ada wajah atau model belum dimuat.
     """
     global _recognizer
@@ -83,15 +93,18 @@ def predict(frame):
     else:
         gray = frame.copy()
 
-    # Deteksi wajah
+    # Deteksi wajah (sudah termasuk equalization di dalam detect_faces)
     faces = detect_faces(gray)
     if len(faces) == 0:
         return []
 
+    # Equalize gray untuk crop — harus sama dengan yang dipakai detect_faces
+    gray_eq = cv2.equalizeHist(gray)
+
     hasil = []
     for (x, y, w, h) in faces:
         # Crop dan resize wajah sesuai ukuran training (200x200)
-        face_roi = gray[y:y+h, x:x+w]
+        face_roi = gray_eq[y:y+h, x:x+w]
         face_roi = cv2.resize(face_roi, (200, 200))
 
         # Predict dengan LBPH

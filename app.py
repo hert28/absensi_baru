@@ -29,7 +29,7 @@ import cv2
 import database as db
 from config import (FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY,
                     SNAPSHOT_PATH, TOLERANSI_MENIT, DATASET_PATH,
-                    CONFIDENCE_THRESHOLD, ANTI_SPOOFING_THRESHOLD,
+                    CONFIDENCE_THRESHOLD,
                     ESP32_ENABLED, ESP32_IP, ESP32_PORT, ESP32_TIMEOUT,
                     MODEL_PATH)
 
@@ -158,8 +158,7 @@ def dashboard():
                            active_page='dashboard',
                            statistik=statistik,
                            absensi_hari_ini=absensi,
-                           conf_threshold=CONFIDENCE_THRESHOLD,
-                           spoof_threshold=ANTI_SPOOFING_THRESHOLD)
+                           conf_threshold=CONFIDENCE_THRESHOLD)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -837,7 +836,16 @@ def api_jadwal_hari_ini():
 @app.route('/api/foto/upload', methods=['POST'])
 @login_required
 def api_foto_upload():
-    """Terima foto wajah via AJAX (base64) dan simpan ke dataset/."""
+    """Terima foto wajah via AJAX (base64) dan simpan ke dataset/.
+
+    Multi-strategy face detection:
+    1. Deteksi dengan histogram equalization (cocok untuk kamera gelap)
+    2. Deteksi tanpa equalization (cocok untuk kamera terang)
+    3. Deteksi dengan parameter lebih toleran (fallback)
+    
+    Crop area wajah + margin 30% agar training data konsisten
+    terlepas dari resolusi kamera (640x480 s.d. 1920x1080).
+    """
     data = request.get_json()
     if not data:
         return jsonify({'status': 'error', 'pesan': 'Data tidak valid.'}), 400
@@ -867,32 +875,68 @@ def api_foto_upload():
         np_arr = np.frombuffer(foto_bytes, np.uint8)
         frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-        if frame is not None:
-            h, w = frame.shape[:2]
-            # Crop area tengah (sesuai panduan oval: ~37.5% width, ~62.5% height)
-            crop_w, crop_h = int(w * 0.45), int(h * 0.70)
-            x1 = (w - crop_w) // 2
-            y1 = (h - crop_h) // 2
-            cropped = frame[y1:y1+crop_h, x1:x1+crop_w]
-            # Simpan hasil crop
-            save_frame = cropped
+        if frame is None:
+            return jsonify({'status': 'error', 'pesan': 'Gagal decode gambar.'}), 400
+
+        # ── Multi-strategy face detection ──
+        # Strategi bertingkat agar kompatibel dengan berbagai kamera
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        )
+
+        faces = []
+
+        # Strategi 1: Dengan histogram equalization (normalisasi cahaya)
+        gray_eq = cv2.equalizeHist(gray)
+        faces = cascade.detectMultiScale(
+            gray_eq, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30)
+        )
+
+        # Strategi 2: Tanpa equalization (kamera yang sudah bagus)
+        if len(faces) == 0:
+            faces = cascade.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30)
+            )
+
+        # Strategi 3: Parameter lebih toleran (fallback terakhir)
+        if len(faces) == 0:
+            faces = cascade.detectMultiScale(
+                gray_eq, scaleFactor=1.05, minNeighbors=3, minSize=(20, 20)
+            )
+
+        if len(faces) > 0:
+            # Ambil wajah terbesar (terdekat ke kamera)
+            areas = [w * h for (x, y, w, h) in faces]
+            best_idx = int(np.argmax(areas))
+            (fx, fy, fw, fh) = faces[best_idx]
+
+            # Tambahkan margin 30% di sekeliling wajah untuk variasi pose
+            margin = 0.3
+            img_h, img_w = frame.shape[:2]
+            mx = int(fw * margin)
+            my = int(fh * margin)
+            x1 = max(0, fx - mx)
+            y1 = max(0, fy - my)
+            x2 = min(img_w, fx + fw + mx)
+            y2 = min(img_h, fy + fh + my)
+            save_frame = frame[y1:y2, x1:x2]
         else:
-            # Fallback: simpan raw bytes
-            save_frame = None
+            # Tidak ada wajah terdeteksi — jangan simpan, client akan retry
+            return jsonify({
+                'status': 'retry',
+                'pesan': 'Wajah tidak terdeteksi, coba lagi.'
+            })
 
         folder = os.path.join(DATASET_PATH, str(user_id))
         os.makedirs(folder, exist_ok=True)
         filepath = os.path.join(folder, f'{index}.jpg')
+        cv2.imwrite(filepath, save_frame)
 
-        if save_frame is not None:
-            cv2.imwrite(filepath, save_frame)
-        else:
-            with open(filepath, 'wb') as f:
-                f.write(foto_bytes)
-
-        return jsonify({'status': 'ok', 'pesan': f'Foto {index} tersimpan.', 'data': {'user_id': user_id}})
+        return jsonify({'status': 'ok', 'pesan': f'Foto {index+1}/50 tersimpan.', 'data': {'user_id': user_id}})
 
     except Exception as e:
+        print(f'[FOTO] Error upload foto: {e}')
         return jsonify({'status': 'error', 'pesan': str(e)}), 500
 
 
@@ -1027,38 +1071,21 @@ def _get_nama_hari():
 def _proses_recognition_multi(frame):
     """Proses satu frame untuk SEMUA wajah yang terdeteksi (multi-face).
 
-    Menggantikan _proses_recognition() yang hanya single-face.
-    Alur: anti-spoofing → predict() semua wajah → loop tracker per user
+    Alur: predict() semua wajah → loop tracker per user
           → cari jadwal → cek duplikat → catat absensi massal.
+    Anti-spoofing dihilangkan untuk mengurangi latency di production.
 
     Returns:
         list of dict — satu dict per wajah yang diproses
     """
-    from face.anti_spoofing import check as spoofing_check
-    from face.recognition import predict  # predict() bukan predict_single()
+    from face.recognition import predict
 
-    # ── 1. Anti-spoofing pada seluruh frame ──
-    spoof_result = spoofing_check(frame)
-
-    if not spoof_result['is_real']:
-        snapshot = _simpan_snapshot(frame, 'spoofing')
-        db.catat_spoofing(snapshot, spoof_result['score'])
-        return [{
-            'status': 'error', 'tipe': 'spoofing',
-            'pesan': 'Spoofing terdeteksi! Gunakan wajah asli.',
-            'spoofing': spoof_result
-        }]
-
-    if spoof_result['label'] == 'NO_FACE':
-        return [{'status': 'skip', 'tipe': 'no_face',
-                 'pesan': 'Tidak ada wajah terdeteksi.', 'spoofing': spoof_result}]
-
-    # ── 2. Predict SEMUA wajah dalam frame ──
+    # ── 1. Predict SEMUA wajah dalam frame ──
     predictions = predict(frame)  # List[{user_id, confidence, bbox, dikenali}]
 
     if not predictions:
         return [{'status': 'skip', 'tipe': 'no_face',
-                 'pesan': 'Tidak ada wajah terdeteksi.', 'spoofing': spoof_result}]
+                 'pesan': 'Tidak ada wajah terdeteksi.'}]
 
     # ── 3. Reset tracker untuk user yang menghilang dari frame ──
     uid_di_frame = {p['user_id'] for p in predictions if p['dikenali']}
@@ -1369,7 +1396,6 @@ if __name__ == '__main__':
     print(f"\n[INFO] Dashboard  : http://127.0.0.1:{FLASK_PORT}")
     print(f"[INFO] Login      : http://127.0.0.1:{FLASK_PORT}/login")
     print(f"[INFO] WebSocket  : ws://127.0.0.1:{FLASK_PORT}")
-    print(f"[INFO] Anti-Spoof : threshold={ANTI_SPOOFING_THRESHOLD}")
     print(f"[INFO] Confidence : threshold={CONFIDENCE_THRESHOLD}")
     print(f"[INFO] ESP32      : {'Aktif' if ESP32_ENABLED else 'Nonaktif'}")
     print(f"[INFO] Auto-Alpha : Aktif (cek setiap 60 detik)")

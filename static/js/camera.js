@@ -1,6 +1,7 @@
 /**
  * camera.js — Streaming kamera ke dashboard via WebSocket
- * Mengirim frame kamera ke server setiap 500ms untuk proses recognition
+ * Mengirim frame kamera ke server setiap 800ms untuk proses recognition
+ * Mendukung multi-face: semua wajah diproses sekaligus per frame
  */
 
 // === State kamera ===
@@ -13,7 +14,7 @@ const CameraManager = {
     isProcessing: false,    // Pengunci: frame baru hanya dikirim setelah server menjawab
     intervalId: null,       // Interval pengiriman frame
     socket: null,           // SocketIO connection
-    frameInterval: 800,     // Kirim frame setiap 800ms (dinaikkan dari 500ms)
+    frameInterval: 800,     // Kirim frame setiap 800ms
     lastResult: null,       // Hasil recognition terakhir
 
     /**
@@ -76,16 +77,17 @@ const CameraManager = {
 
     /**
      * Nyalakan kamera — akses webcam dan mulai stream
+     * Minta resolusi tinggi agar face detection server lebih akurat
      */
     start: async function () {
         if (this.isActive) return;
 
         try {
-            // Minta akses kamera
+            // Minta akses kamera — resolusi tinggi, browser berikan yang terbaik
             this.stream = await navigator.mediaDevices.getUserMedia({
                 video: {
-                    width:  { ideal: 640, max: 1280 },
-                    height: { ideal: 480, max: 720 },
+                    width:  { ideal: 1280, max: 1920 },
+                    height: { ideal: 720, max: 1080 },
                     facingMode: 'user'
                 },
                 audio: false
@@ -96,12 +98,21 @@ const CameraManager = {
             this.video.classList.add('active');
             await this.video.play();
 
-            // Canvas untuk capture (kecil = lebih cepat dikirim & diproses server)
-            // Video tetap ditampilkan di resolusi aslinya ke user
-            this.canvas.width  = 320;
-            this.canvas.height = 240;
+            // Tunggu metadata video untuk mendapatkan resolusi aktual
+            await new Promise(resolve => {
+                if (this.video.videoWidth > 0) { resolve(); return; }
+                this.video.onloadedmetadata = () => resolve();
+            });
+
+            // Canvas capture — kirim resolusi 480x360 ke server
+            // Cukup untuk Haar Cascade face detection, payload kecil = cepat
+            this.canvas.width  = 480;
+            this.canvas.height = 360;
 
             this.isActive = true;
+
+            console.log('[CAMERA] Resolusi kamera:', this.video.videoWidth, 'x', this.video.videoHeight);
+            console.log('[CAMERA] Resolusi kirim ke server:', this.canvas.width, 'x', this.canvas.height);
 
             // Sembunyikan placeholder
             const placeholder = document.getElementById('camera-placeholder');
@@ -116,7 +127,7 @@ const CameraManager = {
             }
 
             DashboardUI.updateCameraButtons(true);
-            DashboardUI.showToast('success', 'Kamera Aktif', 'Face recognition dan anti-spoofing sedang berjalan.');
+            DashboardUI.showToast('success', 'Kamera Aktif', 'Face recognition multi-face sedang berjalan.');
 
             console.log('[CAMERA] Kamera berhasil dinyalakan.');
         } catch (err) {
@@ -198,13 +209,14 @@ const CameraManager = {
 
     /**
      * Capture frame dari video dan kirim ke server
+     * JPEG 75% — cukup untuk LBPH face detection, kualitas lebih tinggi = akurasi lebih baik
      */
     _captureAndSend: function () {
-        // Gambar video ke canvas
+        // Gambar video ke canvas pada resolusi kirim
         this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
 
-        // Kompresi JPEG 65% — cukup untuk LBPH, payload lebih kecil = lebih cepat
-        const frameData = this.canvas.toDataURL('image/jpeg', 0.65);
+        // Kompresi JPEG 75% — balance antara kualitas dan ukuran payload
+        const frameData = this.canvas.toDataURL('image/jpeg', 0.75);
 
         // Aktifkan pengunci sebelum kirim — dilepas di _handleRecognitionResult
         this.isProcessing = true;
@@ -261,21 +273,12 @@ const CameraManager = {
 
         var indicatorSpan = document.querySelector('#processing-indicator span:last-child');
 
-        // Update spoofing indicator dari hasil yang punya info spoofing
-        for (var i = 0; i < results.length; i++) {
-            if (results[i].spoofing) {
-                DashboardUI.updateSpoofingIndicator(results[i].spoofing);
-                break;
-            }
-        }
-
         // ── Kategorikan semua hasil sekaligus ──
         var sukses = [];
         var verifying = [];
         var duplikat = [];
         var noJadwal = [];
         var unknown = [];
-        var spoofing = null;
         var noFace = false;
 
         for (var i = 0; i < results.length; i++) {
@@ -286,18 +289,10 @@ const CameraManager = {
                 if (item.tipe === 'verifying') verifying.push(item);
                 else if (item.tipe === 'no_face') noFace = true;
             } else if (item.status === 'error') {
-                if (item.tipe === 'spoofing') spoofing = item;
-                else if (item.tipe === 'duplikat') duplikat.push(item);
+                if (item.tipe === 'duplikat') duplikat.push(item);
                 else if (item.tipe === 'unknown') unknown.push(item);
                 else if (item.tipe === 'no_jadwal') noJadwal.push(item);
             }
-        }
-
-        // ── Spoofing — prioritas tertinggi, langsung return ──
-        if (spoofing) {
-            if (indicatorSpan) indicatorSpan.textContent = '⚠️ Spoofing!';
-            DashboardUI.showSpoofingWarning(spoofing);
-            return;
         }
 
         // ── Absensi berhasil — tampilkan SEMUA wajah sekaligus ──

@@ -60,49 +60,6 @@ const DashboardUI = {
     },
 
     /**
-     * Update indikator anti-spoofing
-     */
-    updateSpoofingIndicator: function (spoofData) {
-        const indicator = document.getElementById('spoofing-indicator');
-        if (!indicator) return;
-
-        if (spoofData.is_real) {
-            indicator.className = 'active';
-            indicator.querySelector('.dot').style.background = '#34d399';
-            indicator.querySelector('.label').textContent = 'Anti-Spoofing: OK';
-        } else {
-            indicator.className = 'warning';
-            indicator.querySelector('.dot').style.background = '#f87171';
-            indicator.querySelector('.label').textContent = 'SPOOFING!';
-        }
-    },
-
-    /**
-     * Tampilkan peringatan spoofing
-     */
-    showSpoofingWarning: function (data) {
-        const overlay = document.getElementById('recognition-overlay');
-        if (!overlay) return;
-
-        overlay.innerHTML = `
-            <div class="flex items-center gap-3">
-                <span class="material-symbols-outlined text-3xl text-error">gpp_bad</span>
-                <div>
-                    <p class="recognition-name text-error">⚠️ Spoofing Terdeteksi!</p>
-                    <p class="recognition-detail">Score: ${data.score || '-'} — Wajah tidak asli</p>
-                </div>
-            </div>
-        `;
-        overlay.classList.add('active');
-
-        // Sembunyikan setelah 3 detik
-        setTimeout(() => overlay.classList.remove('active'), 3000);
-
-        this.showToast('error', 'Spoofing Terdeteksi',
-            'Sistem mendeteksi percobaan spoofing. Gunakan wajah asli.');
-    },
-
-    /**
      * Tampilkan hasil recognition berhasil di overlay — mendukung multi-face.
      * Menerima array data sehingga semua wajah yang berhasil ditampilkan sekaligus.
      * @param {Array|Object} dataOrList — satu data object atau array data objects
