@@ -282,13 +282,26 @@ async function aktifkanKamera() {
 
 // Capture satu frame dan kirim ke server — SEQUENTIAL (tunggu response)
 async function captureFrame() {
-    // Gunakan resolusi asli kamera agar face detection server lebih akurat
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
+    // Downscale untuk mempercepat upload dan pemrosesan di server (Railway)
+    // Maksimum dimensi adalah 640px untuk menghemat bandwidth & CPU server
+    const maxDim = 640;
+    let w = video.videoWidth || 640;
+    let h = video.videoHeight || 480;
+    if (w > maxDim || h > maxDim) {
+        if (w > h) {
+            h = Math.round((maxDim / w) * h);
+            w = maxDim;
+        } else {
+            w = Math.round((maxDim / h) * w);
+            h = maxDim;
+        }
+    }
+    canvas.width = w;
+    canvas.height = h;
+    ctx.drawImage(video, 0, 0, w, h);
 
-    // JPEG 90% — kualitas tinggi untuk face detection yang lebih akurat
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.90);
+    // JPEG 80% — sangat hemat bandwidth (sekitar 30KB) namun berkualitas tinggi untuk face detection
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.80);
 
     try {
         const response = await fetch('/api/foto/upload', {
