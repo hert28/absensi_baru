@@ -1,47 +1,76 @@
-# face/recognition.py — Engine face_recognition (deep learning 128-dim embeddings)
-# Menggantikan LBPH yang tidak akurat untuk mencegah false positive
-# Library face_recognition menggunakan dlib ResNet untuk encoding wajah
+# face/recognition.py — Engine OpenCV DNN (YuNet + SFace) untuk face recognition
+# Menggunakan deep learning 128-dim embeddings TANPA dlib/face_recognition
+# Semua sudah built-in di opencv-contrib-python 4.8
 
 import cv2
 import os
 import pickle
 import numpy as np
-import face_recognition as fr
+import urllib.request
 
-# Path ke file encodings yang disimpan oleh trainer
-ENCODINGS_PATH = 'models/encodings.pkl'
+MODELS_DIR = 'models'
+YUNET_PATH = os.path.join(MODELS_DIR, 'yunet.onnx')
+SFACE_PATH = os.path.join(MODELS_DIR, 'sface.onnx')
+ENCODINGS_PATH = os.path.join(MODELS_DIR, 'encodings.pkl')
 
-# Toleransi face distance (Euclidean distance pada 128-dim embedding)
-# Semakin rendah = semakin ketat. Default dlib: 0.6
-# 0.5 = ketat, cocok untuk mencegah false positive pada absensi
-FACE_DISTANCE_TOLERANCE = 0.5
+YUNET_URL = 'https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx'
+SFACE_URL = 'https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx'
 
-# Data encoding yang dimuat dari file
+# Cosine similarity threshold: semakin tinggi = semakin ketat
+# Default OpenCV: 0.363 | Untuk absensi: 0.4 (ketat, anti false positive)
+COSINE_THRESHOLD = 0.4
+
+_detector = None
+_recognizer = None
 _known_encodings = None
 _known_ids = None
 
 
-def _load_encodings():
-    """Muat face encodings dari file pickle. Dipanggil otomatis saat predict."""
-    global _known_encodings, _known_ids
-    if not os.path.exists(ENCODINGS_PATH):
-        print('[RECOGNITION] File encodings belum ada. Jalankan training terlebih dahulu.')
+def _download_if_needed(url, path):
+    """Download model ONNX jika belum ada di disk."""
+    if os.path.exists(path):
+        return True
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    print(f'[RECOGNITION] Downloading {os.path.basename(path)}...')
+    try:
+        urllib.request.urlretrieve(url, path)
+        print(f'[RECOGNITION] Download selesai: {path}')
+        return True
+    except Exception as e:
+        print(f'[RECOGNITION] Gagal download: {e}')
         return False
 
+
+def _ensure_models():
+    """Pastikan model YuNet dan SFace sudah tersedia."""
+    global _detector, _recognizer
+    if _detector is None:
+        if not _download_if_needed(YUNET_URL, YUNET_PATH):
+            return False
+        _detector = cv2.FaceDetectorYN.create(YUNET_PATH, '', (320, 320), 0.5, 0.3, 20)
+    if _recognizer is None:
+        if not _download_if_needed(SFACE_URL, SFACE_PATH):
+            return False
+        _recognizer = cv2.FaceRecognizerSF.create(SFACE_PATH, '')
+    return True
+
+
+def _load_encodings():
+    """Muat face encodings dari file pickle."""
+    global _known_encodings, _known_ids
+    if not os.path.exists(ENCODINGS_PATH):
+        print('[RECOGNITION] File encodings belum ada. Jalankan training.')
+        return False
     with open(ENCODINGS_PATH, 'rb') as f:
         data = pickle.load(f)
-
     _known_encodings = data['encodings']
     _known_ids = data['ids']
-    print(f'[RECOGNITION] {len(_known_encodings)} encoding dari '
-          f'{len(set(_known_ids))} user berhasil dimuat.')
+    print(f'[RECOGNITION] {len(_known_encodings)} encoding dari {len(set(_known_ids))} user dimuat.')
     return True
 
 
 def reload_model():
-    """Muat ulang encodings setelah re-training.
-    Dipanggil setelah background training selesai.
-    """
+    """Muat ulang encodings setelah re-training."""
     global _known_encodings, _known_ids
     _known_encodings = None
     _known_ids = None
@@ -49,98 +78,81 @@ def reload_model():
 
 
 def detect_faces(frame):
-    """Deteksi semua wajah dalam frame menggunakan HOG detector (face_recognition).
-
-    Args:
-        frame: numpy array BGR dari OpenCV (atau grayscale)
-
-    Returns:
-        List of (x, y, w, h) untuk setiap wajah terdeteksi
+    """Deteksi semua wajah dalam frame menggunakan YuNet DNN.
+    Returns: list of (x, y, w, h)
     """
-    # Konversi ke RGB (face_recognition membutuhkan RGB)
-    if len(frame.shape) == 2:
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-    else:
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    # Deteksi wajah menggunakan HOG — cepat dan akurat
-    locations = fr.face_locations(frame_rgb, model='hog')
-
-    # Konversi format (top, right, bottom, left) → (x, y, w, h) agar kompatibel
-    faces = []
-    for (top, right, bottom, left) in locations:
-        faces.append((left, top, right - left, bottom - top))
-    return faces
+    if not _ensure_models():
+        return []
+    h, w = frame.shape[:2]
+    _detector.setInputSize((w, h))
+    _, faces = _detector.detect(frame)
+    if faces is None:
+        return []
+    return [(int(f[0]), int(f[1]), int(f[2]), int(f[3])) for f in faces]
 
 
 def predict(frame):
-    """Kenali SEMUA wajah dalam frame menggunakan deep learning embeddings (multi-face).
-
-    Alur:
-    1. Resize frame ke 1/2 untuk deteksi cepat
-    2. Deteksi semua lokasi wajah (HOG)
-    3. Hitung 128-dim encoding untuk setiap wajah
-    4. Bandingkan encoding dengan database (Euclidean distance)
-    5. Jika distance < FACE_DISTANCE_TOLERANCE → dikenali
-
-    Args:
-        frame: numpy array BGR dari OpenCV
-
-    Returns:
-        List of dict: [{'user_id': int, 'confidence': float, 'bbox': (x,y,w,h), 'dikenali': bool}]
-        confidence = face_distance (0.0-1.0+), rendah = lebih mirip.
+    """Kenali SEMUA wajah dalam frame (multi-face) menggunakan SFace embeddings.
+    Returns: list of dict [{'user_id', 'confidence', 'bbox', 'dikenali'}]
     """
     global _known_encodings, _known_ids
 
-    # Muat encodings jika belum
+    if not _ensure_models():
+        return []
     if _known_encodings is None:
         if not _load_encodings():
             return []
 
-    # Konversi BGR → RGB
-    if len(frame.shape) == 2:
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+    # Resize frame untuk kecepatan (max 640px)
+    h, w = frame.shape[:2]
+    scale = 1.0
+    if max(h, w) > 640:
+        scale = 640.0 / max(h, w)
+        small = cv2.resize(frame, (int(w * scale), int(h * scale)))
     else:
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        small = frame
 
-    # Resize ke 1/2 ukuran untuk mempercepat deteksi (4x lebih cepat)
-    small = cv2.resize(frame_rgb, (0, 0), fx=0.5, fy=0.5)
-
-    # Deteksi wajah pada frame kecil
-    face_locations = fr.face_locations(small, model='hog')
-    if not face_locations:
+    sh, sw = small.shape[:2]
+    _detector.setInputSize((sw, sh))
+    _, faces = _detector.detect(small)
+    if faces is None:
         return []
 
-    # Hitung encoding 128-dim untuk setiap wajah
-    face_encodings = fr.face_encodings(small, face_locations)
-
     hasil = []
-    for i, encoding in enumerate(face_encodings):
-        top, right, bottom, left = face_locations[i]
-        # Skalakan kembali ke ukuran asli (karena resize 0.5x)
-        top *= 2; right *= 2; bottom *= 2; left *= 2
+    for face in faces:
+        # Skalakan kembali ke ukuran asli
+        face_orig = face.copy()
+        if scale != 1.0:
+            face_orig[:14] /= scale
 
-        # Hitung Euclidean distance terhadap SEMUA encoding terdaftar
-        distances = fr.face_distance(_known_encodings, encoding)
-
-        if len(distances) == 0:
+        # Align dan crop wajah (SFace alignment built-in)
+        try:
+            aligned = _recognizer.alignCrop(frame, face_orig)
+        except Exception:
             continue
 
-        # Ambil yang paling mirip (distance terkecil)
-        best_idx = int(np.argmin(distances))
-        best_distance = float(distances[best_idx])
-        best_id = _known_ids[best_idx]
+        # Hitung 128-dim embedding
+        embedding = _recognizer.feature(aligned)
 
-        # KEPUTUSAN: hanya dikenali jika distance < toleransi ketat
-        dikenali = best_distance < FACE_DISTANCE_TOLERANCE
+        # Bandingkan dengan semua encoding terdaftar (cosine similarity)
+        best_score = -1.0
+        best_id = -1
+        for i, known_enc in enumerate(_known_encodings):
+            score = _recognizer.match(embedding, known_enc, cv2.FaceRecognizerSF_FR_COSINE)
+            if score > best_score:
+                best_score = score
+                best_id = _known_ids[i]
 
-        print(f'[RECOGNITION] user_id={best_id}, distance={best_distance:.3f}, '
-              f'tolerance={FACE_DISTANCE_TOLERANCE}, dikenali={dikenali}')
+        dikenali = best_score >= COSINE_THRESHOLD
+        x, y, bw, bh = int(face_orig[0]), int(face_orig[1]), int(face_orig[2]), int(face_orig[3])
+
+        print(f'[RECOGNITION] user_id={best_id}, cosine={best_score:.3f}, '
+              f'threshold={COSINE_THRESHOLD}, dikenali={dikenali}')
 
         hasil.append({
             'user_id': best_id,
-            'confidence': round(best_distance, 4),
-            'bbox': (left, top, right - left, bottom - top),
+            'confidence': round(best_score, 4),
+            'bbox': (x, y, bw, bh),
             'dikenali': dikenali
         })
 
@@ -148,51 +160,23 @@ def predict(frame):
 
 
 def predict_single(frame):
-    """Kenali satu wajah utama (confidence terbaik) dalam frame.
-
-    Returns:
-        dict {'user_id': int, 'confidence': float, 'bbox': tuple, 'dikenali': bool}
-        atau None jika tidak ada wajah.
-    """
+    """Kenali satu wajah utama dalam frame."""
     results = predict(frame)
     if not results:
         return None
-
-    # Ambil yang distance terkecil (paling mirip)
-    best = min(results, key=lambda r: r['confidence'])
-    return best
+    return max(results, key=lambda r: r['confidence'])
 
 
 def draw_prediction(frame, predictions):
-    """Gambar kotak dan label prediksi di atas frame.
-
-    Args:
-        frame: numpy array BGR
-        predictions: list dari predict()
-
-    Returns:
-        frame yang sudah ditandai
-    """
+    """Gambar kotak dan label prediksi di atas frame."""
     annotated = frame.copy()
-
     for pred in predictions:
         x, y, w, h = pred['bbox']
-        dist = pred['confidence']
-        uid = pred['user_id']
         dikenali = pred['dikenali']
-
-        # Warna: hijau jika dikenali, merah jika tidak
         color = (0, 255, 0) if dikenali else (0, 0, 255)
-        label = f"ID:{uid} ({dist:.2f})" if dikenali else f"Unknown ({dist:.2f})"
-
-        # Gambar kotak wajah
+        label = f"ID:{pred['user_id']} ({pred['confidence']:.2f})" if dikenali else f"Unknown ({pred['confidence']:.2f})"
         cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 2)
-
-        # Label di atas kotak
         label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-        cv2.rectangle(annotated, (x, y - label_size[1] - 10),
-                      (x + label_size[0], y), color, -1)
-        cv2.putText(annotated, label, (x, y - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
+        cv2.rectangle(annotated, (x, y - label_size[1] - 10), (x + label_size[0], y), color, -1)
+        cv2.putText(annotated, label, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     return annotated

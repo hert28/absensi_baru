@@ -880,28 +880,34 @@ def api_foto_upload():
         if frame is None:
             return jsonify({'status': 'error', 'pesan': 'Gagal decode gambar.'}), 400
 
-        # ── Deteksi wajah menggunakan face_recognition (HOG) ──
-        # Lebih akurat dari Haar Cascade, konsisten dengan pipeline recognition
-        import face_recognition as fr
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        face_locations = fr.face_locations(frame_rgb, model='hog')
+        # ── Deteksi wajah menggunakan Haar Cascade + CLAHE ──
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray_clahe = clahe.apply(gray)
+        cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        )
 
-        if len(face_locations) > 0:
-            # Ambil wajah terbesar (terdekat ke kamera)
-            areas = [(bottom - top) * (right - left)
-                     for (top, right, bottom, left) in face_locations]
+        faces = cascade.detectMultiScale(gray_clahe, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+        if len(faces) == 0:
+            faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+        if len(faces) == 0:
+            faces = cascade.detectMultiScale(gray_clahe, scaleFactor=1.05, minNeighbors=3, minSize=(30, 30))
+
+        if len(faces) > 0:
+            # Ambil wajah terbesar
+            areas = [w * h for (x, y, w, h) in faces]
             best_idx = int(np.argmax(areas))
-            top, right, bottom, left = face_locations[best_idx]
+            (fx, fy, fw, fh) = faces[best_idx]
 
-            # Margin 10% agar crop tidak terlalu ketat (variasi pose)
+            # Margin 10% agar crop tidak terlalu ketat
             margin = 0.1
             img_h, img_w = frame.shape[:2]
-            mw = int((right - left) * margin)
-            mh = int((bottom - top) * margin)
-            y1 = max(0, top - mh)
-            x1 = max(0, left - mw)
-            y2 = min(img_h, bottom + mh)
-            x2 = min(img_w, right + mw)
+            mx, my = int(fw * margin), int(fh * margin)
+            y1 = max(0, fy - my)
+            x1 = max(0, fx - mx)
+            y2 = min(img_h, fy + fh + my)
+            x2 = min(img_w, fx + fw + mx)
             save_frame = frame[y1:y2, x1:x2]
         else:
             # Tidak ada wajah terdeteksi — jangan simpan, client akan retry
