@@ -1,30 +1,33 @@
-# face/trainer.py — Training LBPH dari dataset foto wajah
+# face/trainer.py — Training: hitung 128-dim face encodings dari dataset
+# Menggunakan library face_recognition (dlib ResNet) — menggantikan LBPH
 # Dijalankan di background thread, tidak boleh blokir Flask
 
 import os
+import pickle
 import cv2
 import numpy as np
-from config import DATASET_PATH, MODEL_PATH
+import face_recognition as fr
+from config import DATASET_PATH
+
+# Path output encodings (pickle)
+ENCODINGS_PATH = 'models/encodings.pkl'
 
 
 def train_model():
-    """Training model LBPH dari semua foto di folder dataset/.
-    
+    """Hitung face encodings dari semua foto di folder dataset/.
+
     Struktur folder:
         dataset/{user_id}/0.jpg, 1.jpg, ... 49.jpg
-    
-    Foto sudah di-crop ke area wajah + margin saat pengambilan (api_foto_upload).
-    Oleh karena itu, trainer TIDAK perlu re-deteksi wajah — langsung resize
-    dan gunakan seluruh gambar sebagai face ROI.
-    
-    Preprocessing: histogram equalization untuk normalisasi pencahayaan
-    agar model lebih tahan terhadap variasi kamera dan kondisi cahaya.
-    
+
+    Foto sudah di-crop ke area wajah saat pengambilan (api_foto_upload).
+    Trainer mendeteksi ulang wajah di dalam crop untuk alignment yang presisi,
+    lalu menghitung 128-dim encoding menggunakan dlib ResNet.
+
     Output:
-        models/trainer.yml
+        models/encodings.pkl — berisi dict {'encodings': [...], 'ids': [...]}
     """
-    faces = []
-    labels = []
+    known_encodings = []
+    known_ids = []
 
     # Baca semua foto dari setiap subfolder user
     for user_folder in os.listdir(DATASET_PATH):
@@ -37,52 +40,60 @@ def train_model():
         except ValueError:
             continue
 
-        foto_count = 0
+        count = 0
         for filename in os.listdir(user_path):
             if not filename.lower().endswith('.jpg'):
                 continue
 
             filepath = os.path.join(user_path, filename)
-            img = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
+
+            # Baca gambar dalam format RGB (face_recognition butuh RGB)
+            img = fr.load_image_file(filepath)
             if img is None:
                 print(f'[TRAINER] Gagal baca file: {filepath}')
                 continue
 
-            # Resize ke ukuran standar 200x200 untuk konsistensi
-            img = cv2.resize(img, (200, 200))
+            # Deteksi wajah di dalam crop — untuk alignment yang presisi
+            face_locations = fr.face_locations(img, model='hog')
 
-            # CLAHE (Adaptive Histogram Equalization) — normalisasi pencahayaan lokal
-            # Penting agar model tahan terhadap variasi kamera dan cahaya
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            img = clahe.apply(img)
+            if len(face_locations) == 0:
+                # Fallback: jika HOG gagal mendeteksi wajah di dalam crop,
+                # anggap seluruh gambar adalah wajah (karena sudah di-crop saat registrasi)
+                h, w = img.shape[:2]
+                face_locations = [(0, w, h, 0)]  # (top, right, bottom, left)
 
-            faces.append(img)
-            labels.append(user_id)
-            foto_count += 1
+            # Hitung encoding untuk wajah pertama (terbesar)
+            encodings = fr.face_encodings(img, face_locations)
+            if len(encodings) > 0:
+                known_encodings.append(encodings[0])
+                known_ids.append(user_id)
+                count += 1
 
-        if foto_count > 0:
-            print(f'[TRAINER] User {user_id}: {foto_count} foto dimuat.')
+        if count > 0:
+            print(f'[TRAINER] User {user_id}: {count} encoding berhasil dihitung.')
 
-    if len(faces) == 0:
+    if len(known_encodings) == 0:
         print('[TRAINER] Tidak ada data wajah untuk training.')
         return False
 
-    # Buat dan latih LBPH recognizer
-    recognizer = cv2.face.LBPHFaceRecognizer_create()
-    recognizer.train(faces, np.array(labels))
+    # Simpan encodings ke file pickle
+    os.makedirs(os.path.dirname(ENCODINGS_PATH), exist_ok=True)
+    data = {
+        'encodings': known_encodings,
+        'ids': known_ids
+    }
+    with open(ENCODINGS_PATH, 'wb') as f:
+        pickle.dump(data, f)
 
-    # Simpan model
-    os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
-    recognizer.write(MODEL_PATH)
+    print(f'[TRAINER] Training selesai! {len(known_encodings)} encoding dari '
+          f'{len(set(known_ids))} user.')
 
-    print(f'[TRAINER] Training selesai! {len(faces)} foto dari {len(set(labels))} user.')
-
-    # Muat ulang model di engine recognition agar langsung aktif
+    # Muat ulang encodings di engine recognition agar langsung aktif
     try:
         from face.recognition import reload_model
         reload_model()
-        print('[TRAINER] Model berhasil dimuat ulang di recognition engine.')
+        print('[TRAINER] Encodings berhasil dimuat ulang di recognition engine.')
     except Exception as e:
-        print(f'[TRAINER] Gagal reload model: {e}')
+        print(f'[TRAINER] Gagal reload encodings: {e}')
 
     return True

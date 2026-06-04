@@ -26,6 +26,7 @@ import base64
 import threading
 import numpy as np
 import cv2
+import face_recognition as fr
 import database as db
 from config import (FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY,
                     SNAPSHOT_PATH, TOLERANSI_MENIT, DATASET_PATH,
@@ -33,8 +34,7 @@ from config import (FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY,
                     ESP32_ENABLED, ESP32_IP, ESP32_PORT, ESP32_TIMEOUT,
                     MODEL_PATH)
 
-# Override threshold ke 70.0 (Keseimbangan optimal antara toleransi kacamata dan akurasi tinggi)
-CONFIDENCE_THRESHOLD = 70.0
+# Threshold sekarang dikelola oleh face/recognition.py (FACE_DISTANCE_TOLERANCE = 0.5)
 
 # ── Inisialisasi Flask + SocketIO ─────────────────────────────
 app = Flask(__name__)
@@ -881,45 +881,27 @@ def api_foto_upload():
         if frame is None:
             return jsonify({'status': 'error', 'pesan': 'Gagal decode gambar.'}), 400
 
-        # ── Multi-strategy face detection ──
-        # Strategi bertingkat agar kompatibel dengan berbagai kamera
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        )
+        # ── Deteksi wajah menggunakan face_recognition (HOG) ──
+        # Lebih akurat dari Haar Cascade, konsisten dengan pipeline recognition
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        face_locations = fr.face_locations(frame_rgb, model='hog')
 
-        faces = []
-
-        # Strategi 1: Dengan CLAHE (Adaptive Histogram Equalization)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        gray_clahe = clahe.apply(gray)
-        faces = cascade.detectMultiScale(
-            gray_clahe, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
-        )
-
-        # Strategi 2: Tanpa equalization (kamera yang sudah bagus)
-        if len(faces) == 0:
-            faces = cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
-            )
-
-        # Strategi 3: Parameter lebih toleran (fallback terakhir untuk wajah jauh/kecil)
-        if len(faces) == 0:
-            faces = cascade.detectMultiScale(
-                gray_clahe, scaleFactor=1.05, minNeighbors=4, minSize=(30, 30)
-            )
-
-        if len(faces) > 0:
+        if len(face_locations) > 0:
             # Ambil wajah terbesar (terdekat ke kamera)
-            areas = [w * h for (x, y, w, h) in faces]
+            areas = [(bottom - top) * (right - left)
+                     for (top, right, bottom, left) in face_locations]
             best_idx = int(np.argmax(areas))
-            (fx, fy, fw, fh) = faces[best_idx]
+            top, right, bottom, left = face_locations[best_idx]
 
-            # Gunakan margin 0% agar crop wajah saat registrasi sama persis dengan saat pengenalan/prediksi
-            # Hal ini krusial agar histogram LBPH saat training dan predict konsisten
+            # Margin 10% agar crop tidak terlalu ketat (variasi pose)
+            margin = 0.1
             img_h, img_w = frame.shape[:2]
-            x1, y1 = max(0, fx), max(0, fy)
-            x2, y2 = min(img_w, fx + fw), min(img_h, fy + fh)
+            mw = int((right - left) * margin)
+            mh = int((bottom - top) * margin)
+            y1 = max(0, top - mh)
+            x1 = max(0, left - mw)
+            y2 = min(img_h, bottom + mh)
+            x2 = min(img_w, right + mw)
             save_frame = frame[y1:y2, x1:x2]
         else:
             # Tidak ada wajah terdeteksi — jangan simpan, client akan retry

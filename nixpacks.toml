@@ -1,0 +1,4 @@
+# Nixpacks configuration untuk Railway
+# Menambahkan cmake dan gcc yang dibutuhkan untuk kompilasi dlib (face_recognition)
+[phases.setup]
+nixPkgs = ['cmake', 'gcc']
