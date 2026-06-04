@@ -26,7 +26,6 @@ import base64
 import threading
 import numpy as np
 import cv2
-import face_recognition as fr
 import database as db
 from config import (FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY,
                     SNAPSHOT_PATH, TOLERANSI_MENIT, DATASET_PATH,
@@ -883,6 +882,7 @@ def api_foto_upload():
 
         # ── Deteksi wajah menggunakan face_recognition (HOG) ──
         # Lebih akurat dari Haar Cascade, konsisten dengan pipeline recognition
+        import face_recognition as fr
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         face_locations = fr.face_locations(frame_rgb, model='hog')
 

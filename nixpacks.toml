@@ -1,4 +1,5 @@
 # Nixpacks configuration untuk Railway
-# Menambahkan cmake dan gcc yang dibutuhkan untuk kompilasi dlib (face_recognition)
+# Menambahkan system libraries yang dibutuhkan dlib (face_recognition)
+
 [phases.setup]
-nixPkgs = ['cmake', 'gcc']
+nixPkgs = ['cmake', 'gcc', 'xorg.libX11', 'xorg.libXext', 'xorg.libXrender', 'xorg.libSM', 'xorg.libICE']
