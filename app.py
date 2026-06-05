@@ -737,6 +737,23 @@ def api_esp32_status():
         return jsonify({"nama": None, "status": None, "error": str(e)}), 500
 
 
+@app.route('/api/esp32/terakhir')
+def api_esp32_terakhir():
+    """Endpoint publik ESP32 LCD MULTI-FACE (Carousel).
+
+    Mengembalikan JSON Array dari mahasiswa yang absen dalam rentang 5 detik terakhir.
+    Response: [{"nama": "A", "status": "Hadir"}, {"nama": "B", "status": "Terlambat"}]
+    Kosong: []
+    """
+    try:
+        data = db.get_absensi_5detik_terakhir()
+        return jsonify(data)
+    except Exception as e:
+        print(f'[ESP32] Error api_esp32_terakhir: {e}')
+        return jsonify([]), 500
+
+
+
 @app.route('/api/absensi/hari-ini')
 @login_required
 def api_absensi_hari_ini():
