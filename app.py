@@ -728,11 +728,13 @@ def api_esp32_status():
     Response error    : {"nama": null, "status": null, "error": "..."}
     """
     try:
-        data = db.get_absensi_5detik_terakhir()  # selalu list
-        return jsonify(data)                      # [] jika kosong
+        data = db.get_absensi_untuk_esp32()
+        if data:
+            return jsonify(data)
+        return jsonify({"nama": None, "status": None})
     except Exception as e:
         print(f'[ESP32] Error api_esp32_status: {e}')
-        return jsonify([]), 500
+        return jsonify({"nama": None, "status": None, "error": str(e)}), 500
 
 
 @app.route('/api/absensi/hari-ini')
